@@ -1,5 +1,15 @@
 #+TITLE: ehdm
 
+2018/01/05
+復活。
+TypedEmacsValue いらねーかな？
+purescript でいう Foreign と同じ感じで。
+FromEmacsValue と ToEmacsValue は分けるか。
+関数のやつはFn2 a b c とか EffFn3 a b c d とかoを踏襲。
+どこまでを保証するラインをどこが
+simplize するべし。
+
+
 2016/11/21
 hook,buffer local variable に関して
 

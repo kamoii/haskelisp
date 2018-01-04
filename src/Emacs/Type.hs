@@ -40,18 +40,19 @@ type EmacsM =
 -- すとエラーになる。
 --
 -- haskell では不便なので ENil という型を導入する。
-data EmacsType = ESymbol
-               | EInteger
-               | EKeyword
-               | EFunction
-               | EString
-               | ECons
-               | EList
-               | ENil
-               | EBool
-               | EKeymap
-               | EKeyseq
-               | EUnkown     -- 特殊型
+data EmacsType
+  = ESymbol
+  | EInteger
+  | EKeyword
+  | EFunction
+  | EString
+  | ECons
+  | EList
+  | ENil
+  | EBool
+  | EKeymap
+  | EKeyseq
+  | EUnkown
   deriving (Show, Eq)
 
 type EmacsModule = Ptr () -> IO CInt

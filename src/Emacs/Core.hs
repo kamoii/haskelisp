@@ -51,7 +51,7 @@ module Emacs.Core
   ) where
 
 import Prelude()
-import Protolude hiding (mkInteger,print)
+import Protolude hiding (mkInteger,print,Symbol)
 import Control.Exception (displayException)
 import Data.IORef
 import Emacs.Type
