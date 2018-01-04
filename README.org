@@ -1,0 +1,473 @@
+#+TITLE: ehdm
+
+2016/11/21
+hook,buffer local variable に関して
+
+#+BEGIN_QUOTE
+Warning: do not use make-local-variable for a hook variable. The hook
+variables are automatically made buffer-local as needed if you use the
+local argument to add-hook or remove-hook.
+#+END_QUOTE
+
+2016/11/07
+StablePtrのところまとめないとね。
+
+2016/11/07
+じゃないと、まずいよね。逆に Emacs 側に設定した関数(から辿れるオブジェ
+クトもしかり)は GC の対象外になってくれるのかな？
+#+begin_src haskell
+-- TODO: ??? これ StablePtr の効果も兼ねている？
+foreign import ccall "wrapper"
+  wrapEFunctionStub :: EFunctionStub -> IO (FunPtr EFunctionStub)
+#+end_src
+
+ああ、ちゃんと gc かの対象に外れるは。
+#+BEGIN_QUOTE
+You have to release the generated code explicitly with
+`freeHaskellFunPtr` to avoid memory leaks: GHC has no way to know if
+the function pointer is still referenced in some foreign code, hence
+it doesn't collect it.
+#+END_QUOTE
+
+
+2016/11/06
+[[https://github.com/knupfer/haskell-emacs][GitHub - knupfer/haskell-emacs: Write Emacs extensions in Haskell]] が
+stackサポートしていた... メリットないな。こっちだと多分別プロセスが起
+動するだけなので、スレッドが使える。
+https://github.com/knupfer/haskell-emacs/issues/60 にあるように、転送
+オーバーヘッドだけが、haskell-emacs のデメリットなので現在のところダイ
+ナミックモジュールへの転向は考えていないそうだ。
+あとデメリットとして haskell -> emacs 側への関数呼び出しに制約があるよ
+うだ。
+あと動的な関数の登録は haskell-emacs ではできないのかな？
+
+2016/11/06
+TODO
+
+ * [ ] ベンチマークを取る
+   - haskell-emacs を参考にすればいいかな？
+ * [X] シンボルのキャッシュ化
+ * [ ] TH 依存なくすか？コンパイルが糞遅い
+ * [ ] ライブラリ化
+ * [ ] githubに登録
+ * [ ] ドキュメント書く
+ * [ ] hackage に登録
+ * [ ] 例外処理
+ * [ ] 外部プロセスとのやりとり
+   - emacs 自身がバッファ通してでしか入力を取れないのえ
+
+2016/11/06
+helm の candidate 生成に使えたよ!
+ただ遅い？haskellからemacsへの呼び出しが重い。
+immutable な EmacsValue はキャッシュすのがいいかな。
+ただ weak pointer とかの処理をする必要がある。
+cons とか list の関数
+
+2016/11/05
+Tagged は必要なのか？という根本的な疑問。
+まず Emacs と Haskell 間のやりとり、を考える。
+それを安全に扱うのにメリットがなければ導入する必要はない。
+
+EmacsValue と
+EmacsValue -> Maybe Int
+Int -> EmacsValue があればいいのでは...
+
+ * funcall: haskell から emacs の関数を呼び出す
+   * 問題となるのは引数と返値
+     * 引数は
+       - Int や Text, (Symbol Text) を渡す
+       - EmacsValue を渡す
+       - ただ引数は他の
+     * 返値は
+       - EmacsValue として
+       - 自分で型が必要であれば EmacsValue -> Maybe a みたいな変換をか
+         ます
+ * emacs の変数に設定
+
+結局 Haskell 側では Tagged a EmacsValue を扱うメリットはなく、Haskell
+の型に変換すればいいだけなので、その時に安全性は確保されている(という
+かそれ以上の安全を提供していない)。
+
+複雑になるだけのなので、できれば除外するか。今の状態は残しておきたいの
+で、このタイミングで dots は git 移行しよう。
+
+* 2016/11/14 例外対応
+
+Haskell で投げられた例外の対応
+
+Emacs -> Haskell から呼ばれるところに設置する必要がある。例外が補足で
+きないと恐らく emacs がクラッシュする。非同期例外については考える必要
+はない。
+
+二つの場合を対処する必要がある(多段)
+
+ 1. Haskell 側で例外が発生した
+ 2. Haskell から呼び出した emacs 関数の中で signal(or throw)された
+
+2. の場合、emacsから返ってきた時に non local exit かどうか確認し、
+もしそうであれば haskellの例外を投げる。そして haskell -> emacsに戻る
+場所で haskellの例外は補足する。その場合、non-local-exit は既に設定さ
+れているので、
+
+_non_local_exit_signal で haskellエラーであることを設定する。ただし
+これが簡単にはいかず、
+
+  * IO モナドの中で実現する必要がある
+  * emacs関数を呼び出す際に例外が発生しうるものを呼び出せない
+
+signal, throw中でも利用できる関数だけしか利用してはいけない。
+
+* haskell 側の例外を補足し、emacs の signal に変換する
+
+どこで補足するかだな。。。
+runEmacsM の中かな?
+ただ runEmacsM の外側で
+mkFunciton の stub と、emacsModuleInit かな？
+
+* TODO Haskell の例外を emacs の例外に変換
+
+2016/11/11
+あれー。
+以下の関数で、exit した後のメッセージが飛ばない。やっぱ jmp しているの
+か？
+#+begin_src haskell
+  defun' "error-test" $ do
+    s <- mkString "fooo"
+    message "before signaling"
+    nonLocalExitSignal "test" s
+    message "not exited here"
+#+end_src
+
+いや、やっぱ jump していなかった。emacs-module.c のソースコードのコメ
+ント読めば例外ハンドリングをどうするか書かれている。
+
+ * emacs では通常 setjmp/longjmp を使っている
+ * ただ外部モジュールではジャンプしたら不都合があるため、
+   emacs-module.c で(haskell -> emacsで)呼び出す関数は
+   - throw,catch されてもちゃんとキャッチしてくれる
+   - pending_non_local_exitメンバに throw か signal が設定される
+ * haskell 側で明示的に設定した場合は non_local_exit_{signal,throw}
+ * pending_non_local_exit に non-return が設定されている、
+   emacs-module.c で提供されている関数は使えなくなる(ものがある)
+ * pending_non_local_exit に non-return を設定したまま emacs に戻ると
+   signal か throw される
+
+#+begin_src haskell
+  defun' "error-test" $ do
+    s <- mkString "fooo"
+    message "before signaling"  -- ok
+    nonLocalExitSignal "test" s
+    message "not exited here"   -- ng
+    nonLocalExitClear
+    message "how about here"    -- ok
+#+end_src
+
+
+
+longjmpしないと行けないかと思ったがそうでもないかな。
+
+ * non_local_exit_{signal,throw} が env->prviate_members の特定のメン
+   バを設定し、haskell -> c に帰ったときに、メンバが設定されていれば例
+   外を投げる感じかな？
+   - non_local_exit_get はそのメンバの値を取得
+   - non_local_exit_check はそのメンバが設定されているかのチェック
+   - non_local_exit_clear はクリア
+     - emacs に帰っても例外は投げられなくなるかな？
+
+そもそも emacsでのエラーハンドリングってどうなっているんだ？
+[[https://www.gnu.org/software/emacs/manual/html_node/elisp/Nonlocal-Exits.html#Nonlocal-Exits][GNU Emacs Lisp Reference Manual: Nonlocal Exits]]
+
+ * Nonlocal Exists の仕組みが何故か二つある
+   - Catch/Throw
+     - どっちというと制御構造的なもの？
+     - モジュールの中で完結して使う必要がある？
+     - モジュールの外に出す場合は error が適切かな？
+   - Error
+     * signalがエラーを投げるための関数
+       : (signal 'no-such-error '("My unknown error condition"))
+       - error 関数は 'error シンボルで signal しているようだ
+
+#+begin_src c
+  /* Non-local exit handling.  */
+
+  enum emacs_funcall_exit (*non_local_exit_check) (emacs_env *env);
+
+  void (*non_local_exit_clear) (emacs_env *env);
+
+  enum emacs_funcall_exit (*non_local_exit_get)
+    (emacs_env *env,
+     emacs_value *non_local_exit_symbol_out,
+     emacs_value *non_local_exit_data_out);
+
+  void (*non_local_exit_signal) (emacs_env *env,
+				 emacs_value non_local_exit_symbol,
+				 emacs_value non_local_exit_data);
+
+  void (*non_local_exit_throw) (emacs_env *env,
+				emacs_value tag,
+				emacs_value value);
+#+end_src
+
+** emacs_funcall_exit
+
+#+begin_src c
+/* Possible Emacs function call outcomes.  */
+enum emacs_funcall_exit
+{
+  /* Function has returned normally.  */
+  emacs_funcall_exit_return = 0,
+
+  /* Function has signaled an error using `signal'.  */
+  emacs_funcall_exit_signal = 1,
+
+  /* Function has exit using `throw'.  */
+  emacs_funcall_exit_throw = 2,
+};
+#+end_src
+
+** non_local_exit_{signal,throw} の違い
+
+emacs-module.c から抜粋。種別が違うだけで、投げられるのは同じようだ。
+
+#+begin_src c
+static void
+module_non_local_exit_signal_1 (emacs_env *env, Lisp_Object sym,
+				Lisp_Object data)
+{
+  struct emacs_env_private *p = env->private_members;
+  if (p->pending_non_local_exit == emacs_funcall_exit_return)
+    {
+      p->pending_non_local_exit = emacs_funcall_exit_signal;
+      p->non_local_exit_symbol = sym;
+      p->non_local_exit_data = data;
+    }
+}
+
+static void
+module_non_local_exit_throw_1 (emacs_env *env, Lisp_Object tag,
+			       Lisp_Object value)
+{
+  struct emacs_env_private *p = env->private_members;
+  if (p->pending_non_local_exit == emacs_funcall_exit_return)
+    {
+      p->pending_non_local_exit = emacs_funcall_exit_throw;
+      p->non_local_exit_symbol = tag;
+      p->non_local_exit_data = value;
+    }
+}
+#+end_src
+
+* DONE Haskell側で状態を保持する
+
+例えば良く利用するシンボルをキャッシュするなどしたい。これを実現するに
+は、
+
+ * make_function 時に最後の引数にデータを渡す。これはその関数が呼び出
+   された際に最後の引数として渡される
+   - この値は haskell 側で GC の対象から明示に外す必要がある(haskell側
+     では参照を持たないので)
+   - +weakpointer かな？+
+   - [[https://hackage.haskell.org/package/base-4.9.0.0/docs/Foreign-StablePtr.html][Foreign.StablePtr]] だ必要なのは
+ * haskell 側で emacs_value を保持する場合は、emacs に制御が返った際に、
+   それらが GC の対象から外れるように指定する必要がある
+   - make_global_ref/free_global_ref 関数を使えば良い
+   - モジュール側が保持しておく emacs_value のメモリが勝手に解放されるのを防ぐ(リファレンスを保持してくれる)。
+
+#+begin_src c
+emacs_value (*make_function) (emacs_env *env,
+			ptrdiff_t min_arity,
+			ptrdiff_t max_arity,
+			emacs_value (*function) (emacs_env *env,
+							ptrdiff_t nargs,
+							emacs_value args[],
+							void *)
+				 EMACS_NOEXCEPT,
+			const char *documentation,
+			void *data);
+
+/* Memory management.  */
+emacs_value (*make_global_ref) (emacs_env *env,
+			  emacs_value any_reference);
+
+void (*free_global_ref) (emacs_env *env,
+			   emacs_value global_reference);
+#+end_src
+
+* DONE モジュール、型整理
+
+
+ * Internal.hs
+   - emacs が提供する emacs_module.h の各関数のラッパー + α
+   - 主に扱うのは EmacsValue、EmacsM
+     - EmacsValue の型などのチェック
+     - EmacsValue <-> Haskell の型(Int, Text) など
+   - 関数呼び出し関数 funcall' も提供
+   - 実際に実行するための関数 getEnv/runEmacsM も提供する
+   - EmacsType が登場するのは typeOf, isTypeOf だけ
+   - 基本的にこれを直接触るのはなしにするべきかな
+   - [ ] extractEInteger があるのは why?
+   - [ ] 名前は ' 付けているけど、無しでいいきがする
+   - [ ] 名前は mkEString ではなく、mkString でいいかな
+ * Core.hs
+   - Internal.hs を使い ラップ？ or 拡張？
+   - 型は Tagged tag EmacsValue のみ扱う？べき
+   - [ ] EmacsValue を受け取っている箇所は Tagged a EmacsValue を取る
+     べきかな
+
+* 初期構想
+
+普通に build すると require 時に以下のエラーが出てしまう。
+: undefined symbol: stg_forkOnzh
+
+どうやら haskell runtime にリンクする必要があるらしい、が、 +cabal では
+指定できない？+  なので ビルド時のオプションとして渡す。
+指定できないことはないはず。。。
+
+: $ stack build --ghc-options -lHSrts-ghc$(stack exec -- ghc-pkg field ghc version --simple-output)
+
+https://mail.haskell.org/pipermail/haskell-cafe/2012-September/103227.html
+[[http://stackoverflow.com/questions/36167737/how-to-link-to-haskell-static-runtime-with-cabal-and-stack-without-hard-coding-g][How to link to Haskell static runtime with cabal and stack without
+hard coding ghc version? - Stack Overflow]] を参考にするのがいいかな？
+
+
+ * Tagged or NewType
+   * Tagged EInteger EmacsValue (+ 利便性のために型シノニムも？)
+   * +newtype EInterger = EInteger EmacsValue+
+     - これだとどちらにしろ -> EmacsValue への型クラスが必要になる
+ * Haskell -> Tagged a EmacsValue
+   - Haskell側から生成した値を Emacs 側に渡す場合
+     1) 単一の値を setq
+     2) *Haskell関数をの返値を Emacs 側から呼び出すときの返値* これが
+        必須なので結局必要だよね
+     3) Emacs関数を Haskell 側で呼び出す際の引数とか？
+   - EmacsM Monad の中で計算する必要がある
+   - Haskell のほうが型が豊富なため、単射ではないことに注意。例えば
+     Word8, Int, Int8 などは全部 emacs の integer になる
+   - +そもそも写像か？例えば Haskell の Int を Emacs への複数の型へと変換したいことはないだろうか+
+     - いや、これは止めたほうがいいかな
+     - Text を Emacs の 文字列もしくは シンボルに変換するという分岐が
+       あるな。。
+     - なるほお
+   - Integer とかは値が収まっている間は
+     - つまり例外処理が必要かな？
+   - 選択肢二つ
+     1. 個別のspecific な関数
+     2. ToEmacsValue 型クラス + 型family
+   - いや両方組合せがいいかな？後者は利便性 + haskell関数をemacs側に持っ
+     ていく時に必要かな？ それとも明示させるか？
+   - 綺麗に一対一でも単車でも前者でもないので、明示的な関数を極力使う
+     べき(2 のみかな
+ * EmacsValue の tag付け
+   - そそも EmaccValue の Emacs側での型を求める関数が必要になる
+   - Emacs毎の型毎に
+     : tryTagInteger :: EmacsValue -> Maybe (Tagged EInteger EmacsValue)
+     - これは Proxy とかで使えば個別の関数は作る必要なし？
+ * Haskell <- (Tagged?) EmacsValue
+   - これも EmacsM の中で行なう必要がある
+   - 用途
+     - Emacs側から Haskell 側の関数を呼び出したいとき
+     - Emacs関数を Haskell側で呼び出したときに返値
+   - FromEmacsValue
+     - Maybe の必要がる
+     - Tagged 版の場合は
+ * Tagged EmacsValue のまま操作する関数も色々
+   - 例えばバッファとかは Haksell 側ではネイティブな
+
+#+begin_src haskell
+{-# LANGUAGE OverloadedStrings,FlexibleInstances,UndecidableInstances #-}
+module Main where
+
+data EmacsValue = EOne
+  deriving Show
+
+class EV a where
+    toEv :: a -> EmacsValue
+    fromEv :: EmacsValue -> a
+
+class Callable a where
+    call :: a -> [EmacsValue] -> EmacsValue
+
+instance {-# OVERLAPPING #-} EV a => Callable a where
+    call a _ = toEv a
+
+instance {-# OVERLAPPING #-} (EV a, Callable b) => Callable (a -> b) where
+    call f (e:es) = call (f (fromEv e)) es
+    call _ []     = undefined
+
+instance EV Int where
+    toEv _ = EOne
+    fromEv  _ = 1
+
+plusOne :: Int -> Int
+plusOne = (+1)
+
+mul :: Int -> Int -> Int
+mul = (*)
+
+main :: IO ()
+main = do
+    print $ call plusOne [EOne]
+#+end_src
+* 型対応
+
+| Text       | EString   |
+| Int        | EInteger  |
+| Symbol(*1) | ESymbol   |
+| Nil(*2)    | ENil(※3) |
+| Cons *     |           |
+| List *
+
+※3 emacs 側には nil という型は存在しない。特殊なシンボルとして表現さ
+れている。
+
+* TODO 最初に gist レベルでいいので ehdm で実現してみるか
+多分バッファ関連が必要になる。
+
+* TODO コマンド対応
+
+[[https://www.gnu.org/software/emacs/manual/html_node/elisp/Defining-Commands.html][GNU Emacs Lisp Reference Manual: Defining Commands]] 参照。
+[[https://www.gnu.org/software/emacs/manual/html_node/elisp/Symbol-Properties.html][GNU Emacs Lisp Reference Manual: Symbol Properties]]
+
+ * interactive は special form なので emacs-module からは呼べない(evil
+   経由ならいけるが。。)
+ * interactive はそもそも関数に対してフラグを設定するようなもの。その
+   フラグを call-interactivly が読んで必要な引数を渡す仕組みになってい
+   る
+ * 代わりに interactive-form 属性および interactive-only 属性が使えそ
+   うかな？
+   - というか関数じゃなくてシンボル側に設定があるのか。。
+
+
+interactive-form に設定するべき値が分からん。
+ソースを見た。
+
+data.c
+callint.c
+
+FInteractive_form(..) は nil でなければ 'interactove-form の値を form
+として返している。
+
+call-interactively は以下のように利用している。
+#+begin_src c
+    form = Finteractive_form (function);
+    if (CONSP (form))
+      specs = filter_specs = Fcar (XCDR (form));
+    else
+      wrong_type_argument (Qcommandp, function);
+#+end_src
+
+cdr の car を返している。ということは以下のような形式を設定すればよさ
+げ。
+
+: (interactiev nil)
+: (interactive "b\hoge")
+* ToESymbol の親に ToEmacsValue を設定してはいけない？
+
+そもそも ToESymbol はないほうがいいかな？
+いや、型の対応をきっちりするべきかな？ Text -> ESymbol は多分まずい。
+Text -> EString と混同する恐れがあるから。
+
+funcall1 :: ToEmacsValue a
+         => Text -> a -> EmacsM EmacsValue
+* 型クラスに A と EmacsM A 両方の instance を利便性のため定義しているがいいのか？
+* Emacs 25 のビルド
