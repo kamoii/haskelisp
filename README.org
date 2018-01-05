@@ -9,6 +9,8 @@ FromEmacsValue と ToEmacsValue は分けるか。
 どこまでを保証するラインをどこが
 simplize するべし。
 
+関数は生の形で。EmacsValue を使おう
+
 
 2016/11/21
 hook,buffer local variable に関して

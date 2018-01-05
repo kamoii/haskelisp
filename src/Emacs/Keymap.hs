@@ -4,7 +4,7 @@
 module Emacs.Keymap where
 
 import Prelude()
-import Protolude
+import Protolude hiding (Symbol)
 import Emacs.Core
 import Emacs.Symbol
 
@@ -24,7 +24,7 @@ getKeymap name =
 kbd :: Text -> EmacsM EmacsKeyseq
 kbd keys =
   TypedEmacsValue <$> funcall1 "kbd" keys
-  
+
 
 -- getKeymap :: Text -> EmacsM Keymap
 

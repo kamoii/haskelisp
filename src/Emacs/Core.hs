@@ -50,7 +50,7 @@ module Emacs.Core
   , typeCheckWithP
   ) where
 
-import Prelude()
+import Prelude(error)
 import Protolude hiding (mkInteger,print,Symbol)
 import Control.Exception (displayException)
 import Data.IORef
@@ -707,7 +707,7 @@ typeCheckWithP :: Text -> EmacsValue -> EmacsM (TypedEmacsValue et)
 typeCheckWithP p ev = do
   b <- isNil =<< funcall1 p ev
   if b
-    then error $ "type error with predicate function: " <> p
+    then error $ toS $ "type error with predicate function: " <> p
     else pure $ TypedEmacsValue ev
 
 -- opaque なまあ扱う。チェックは不要
