@@ -66,42 +66,42 @@ newtype EmacsValue = EmacsValue (Ptr ())
 newtype GlobalEmacsValue = GlobalEmacsValue (Ptr ())
   deriving (Storable)
 
-castGlobalToEmacsValue :: GlobalEmacsValue -> EmacsValue
+castGlobalToEmacsValue
+  :: GlobalEmacsValue
+  -> EmacsValue
 castGlobalToEmacsValue (GlobalEmacsValue p) =
   EmacsValue p
 
--- 本来は GADTsでやるのが正しいかな？
-newtype TypedEmacsValue (et :: EmacsType) = TypedEmacsValue EmacsValue
+newtype TypedEmacsValue et = TypedEmacsValue EmacsValue
 
-untype :: TypedEmacsValue et -> EmacsValue
+untype
+  :: TypedEmacsValue et
+  -> EmacsValue
 untype (TypedEmacsValue ev) = ev
 
--- 確認もしくは確証なしに
-typeUnsafe :: EmacsValue -> TypedEmacsValue et
-typeUnsafe = TypedEmacsValue
+unsafeType
+  :: EmacsValue
+  -> TypedEmacsValue et
+unsafeType = TypedEmacsValue
 
 -- EmacsValue Opaque Type :w
---
--- これは導入するべきなのか？
--- 少なくともこれにラップする際は確実に保証できるときのみに
-type EmacsSymbol   = TypedEmacsValue 'ESymbol
-type EmacsInteger  = TypedEmacsValue 'EInteger
-type EmacsString   = TypedEmacsValue 'EString
-type EmacsKeyword  = TypedEmacsValue 'EKeyword
-type EmacsCons     = TypedEmacsValue 'ECons
-type EmacsFunction = TypedEmacsValue 'EFunction
-type EmacsList     = TypedEmacsValue 'EList
-type EmacsNil      = TypedEmacsValue 'ENil
-type EmacsBool     = TypedEmacsValue 'EBool
-type EmacsKeymap   = TypedEmacsValue 'EKeymap
-type EmacsKeyseq   = TypedEmacsValue 'EKeyseq
+data EmacsSymbol   
+data EmacsInteger  
+data EmacsString   
+data EmacsKeyword  
+data EmacsCons     
+data EmacsFunction 
+data EmacsList     
+data EmacsNil      
+data EmacsBool     
+data EmacsKeymap   
+data EmacsKeyseq   
 
 -- Emacs の値に対する Haskell の型
 -- 数値や文字列は素直なんだけど、他
 -- Nil は空 [] でいいのかな？
 newtype Symbol     = Symbol Text
 newtype Keyword    = Keyword Text
-newtype Function f = Function f
 
 -- 例外機構
 
