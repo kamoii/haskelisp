@@ -7,7 +7,7 @@ license:             GPL-3
 license-file:        LICENSE
 author:              Takenari Shinohara
 maintainer:          takenari.shinohara@gmail.com
-copyright:           2016 Takenari Shinohara
+copyright:           2016-2018 Takenari Shinohara
 category:            Editor, Emacs
 build-type:          Simple
 extra-source-files:  README.md
@@ -17,15 +17,16 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Emacs
-                     , Emacs.Type
-                     , Emacs.Core
-                     , Emacs.Symbol
-                     , Emacs.Function
-                     , Emacs.Command
-                     , Emacs.NAdvice
-                     , Emacs.Module
-                     , Emacs.Keymap
+  exposed-modules:     Emacs.Internal
+                     , Emacs.Internal.Types
+                     , Emacs.Internal.FFI
+                     --  Emacs
+                     -- , Emacs.Symbol
+                     -- , Emacs.Function
+                     -- , Emacs.Command
+                     -- , Emacs.NAdvice
+                     -- , Emacs.Module
+                     -- , Emacs.Keymap
   build-depends:       base >= 4.8 && < 5
                      , protolude
                      , containers

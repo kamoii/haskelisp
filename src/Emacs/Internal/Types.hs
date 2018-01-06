@@ -1,12 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE KindSignatures #-}
-module Emacs.Type
-  ( module Emacs.Type
-  , CInt  -- for emacsModule
-  ) where
+module Emacs.Internal.Types where
 
 import Prelude(Show(..))
 import Protolude hiding (show)
@@ -14,20 +9,6 @@ import Data.IORef
 import GHC.Ptr
 import Foreign.C.Types
 import Foreign.StablePtr
-import Control.Monad.Reader
-
-data PState = PState
-  { symbolMap :: IORef (Map Text GlobalEmacsValue)
-  }
-
-data Ctx = Ctx
-  { pstateStablePtr :: StablePtr PState
-  , pstate :: PState
-  , emacsEnv :: EmacsEnv
-  }
-
-type EmacsM =
-  ReaderT Ctx IO
 
 -- nil について
 --
@@ -55,14 +36,13 @@ data EmacsType
   | EUnkown
   deriving (Show, Eq)
 
-type EmacsModule = Ptr () -> IO CInt
-
 newtype EmacsEnv   = EmacsEnv (Ptr ())
   deriving (Storable)
 
 newtype EmacsValue = EmacsValue (Ptr ())
   deriving (Storable)
 
+-- `make_global_re`関数で
 newtype GlobalEmacsValue = GlobalEmacsValue (Ptr ())
   deriving (Storable)
 
@@ -88,20 +68,12 @@ unsafeType = TypedEmacsValue
 data EmacsSymbol   
 data EmacsInteger  
 data EmacsString   
-data EmacsKeyword  
-data EmacsCons     
 data EmacsFunction 
-data EmacsList     
-data EmacsNil      
-data EmacsBool     
-data EmacsKeymap   
-data EmacsKeyseq   
 
 -- Emacs の値に対する Haskell の型
 -- 数値や文字列は素直なんだけど、他
 -- Nil は空 [] でいいのかな？
-newtype Symbol     = Symbol Text
-newtype Keyword    = Keyword Text
+newtype Symbol = Symbol Text
 
 -- 例外機構
 
@@ -122,11 +94,11 @@ instance Exception EmacsException
 
 -- 関数定義のため必要な型
 
-type EFunctionStub
+type EFunctionStub a
   = EmacsEnv
   -> CPtrdiff
   -> Ptr (Ptr ())
-  -> StablePtr PState
+  -> StablePtr a
   -> IO EmacsValue
 
 data InteractiveForm = InteractiveNoArgs
