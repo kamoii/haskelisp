@@ -1,7 +1,10 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Emacs.Internal.Types where
+module Emacs.Internal.Types
+  ( module Emacs.Internal.Types
+  , CInt
+  ) where
 
 import Prelude(Show(..))
 import Protolude hiding (show)
@@ -35,6 +38,11 @@ data EmacsType
   | EKeyseq
   | EUnkown
   deriving (Show, Eq)
+
+type EmacsModule = EmacsRuntime -> IO CInt
+
+newtype EmacsRuntime = EmacsRuntime (Ptr ())
+  deriving (Storable)
 
 newtype EmacsEnv   = EmacsEnv (Ptr ())
   deriving (Storable)

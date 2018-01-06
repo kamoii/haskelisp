@@ -35,8 +35,6 @@ data Ctx = Ctx
 type EmacsM =
   ReaderT Ctx IO
 
-type EmacsModule = Ptr () -> IO CInt
-
 -- 基本的に一度作成したコンテキストを使い回す。
 -- ただし現状では別途コンテキストを作成して使ったとしても問題ない
 -- initCtx :: MonadIO m => EmacsEnv -> m Ctx

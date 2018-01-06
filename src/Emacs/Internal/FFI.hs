@@ -36,10 +36,10 @@ import Emacs.Internal.Types
 -- | FFI
 
 foreign import ccall _get_emacs_env_from_rt
-  :: Ptr ()
+  :: EmacsRuntime
   -> IO EmacsEnv
 
-getEmacsEnvFromRT :: Ptr () -> IO EmacsEnv
+getEmacsEnvFromRT :: EmacsRuntime -> IO EmacsEnv
 getEmacsEnvFromRT =
   _get_emacs_env_from_rt
 
