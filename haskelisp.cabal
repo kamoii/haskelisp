@@ -20,8 +20,9 @@ library
   exposed-modules:     Emacs.Internal
                      , Emacs.Internal.Types
                      , Emacs.Internal.FFI
+                     , Emacs.Core
+                     , Emacs.Symbol
                      --  Emacs
-                     -- , Emacs.Symbol
                      -- , Emacs.Function
                      -- , Emacs.Command
                      -- , Emacs.NAdvice

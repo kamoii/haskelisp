@@ -91,6 +91,7 @@ data EmacsFuncallExit
   | EmacsFuncallExitThrow
   deriving (Show,Eq,Enum)
 
+-- Emacs側で発生した例外を表現
 data EmacsException
   = EmacsException EmacsFuncallExit EmacsValue EmacsValue
 

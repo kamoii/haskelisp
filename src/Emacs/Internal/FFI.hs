@@ -15,11 +15,10 @@ module Emacs.Internal.FFI
   , extractInteger
   , extractString
   , funcall
-  , errorHandle
   ) where
 
 import Prelude()
-import Protolude 
+import Protolude
 import Control.Exception (displayException)
 import Data.IORef
 import Foreign.C.Types
@@ -172,10 +171,10 @@ makeFunction
   -> (EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue)
   -> Int
   -> Int
-  -> Text
+  -> Doc
   -> StablePtr a
   -> IO (TypedEmacsValue EmacsFunction)
-makeFunction env func minArity' maxArity' doc' datap = do
+makeFunction env func minArity' maxArity' (Doc doc') datap = do
   let minArity = fromIntegral minArity' :: CPtrdiff
       maxArity = fromIntegral maxArity' :: CPtrdiff
   stubp <- wrapEFunctionStub stub
@@ -224,17 +223,17 @@ errorHandle
   :: EmacsEnv
   -> IO EmacsValue
   -> IO EmacsValue
-errorHandle env action = 
+errorHandle env action =
   action `catch` emacsExceptionHandler
-         `catch` haskellExceptionHandler 
+         `catch` haskellExceptionHandler
   where
     -- Handler の中で例外が発生した場合は諦め？
     -- TODO: ハンドラ中に EmacsException が投げられたときは無視しない
     -- といけな？
     --
-    -- EmacsValue 
+    -- EmacsValue
     haskellExceptionHandler :: SomeException -> IO EmacsValue
-    haskellExceptionHandler e = 
+    haskellExceptionHandler e =
        nonLocalExitGet env >>= \case
          Just (_,s,_) ->
            pure s
@@ -264,11 +263,11 @@ errorHandle env action =
 -- な型を返すようにして、checkExitStatus しないと IO(や EmacsM)に直せ
 -- ないようにするのがいいのかな？ただちょっと面倒。
 -- そこまでする必要はないか。
---  
+--
 --   * checkExistStatus はこのモジュール外には公開されない
 --   * このモジュールが正しく checkExistStatus が呼ばれることの責任を持つ
 --   * IONeedCheckの型にし忘れたら結局同じかな...
---   * むしろ ffi関数の命名規則で？  
+--   * むしろ ffi関数の命名規則で？
 --
 checkExitStatus :: EmacsEnv -> IO a -> IO a
 checkExitStatus env ccall = do
@@ -330,7 +329,7 @@ intern
   :: EmacsEnv
   -> Text
   -> IO (TypedEmacsValue EmacsSymbol)
-intern env str =  
+intern env str =
   map unsafeType
     . checkExitStatus env
     . withCString (toS str) $ \cstr -> _intern env cstr
@@ -344,7 +343,7 @@ makeGlobalRef
   :: EmacsEnv
   -> EmacsValue
   -> IO GlobalEmacsValue
-makeGlobalRef env ev = 
+makeGlobalRef env ev =
   checkExitStatus env $ _make_global_ref env ev
 
 -- 例外ハンドリング
@@ -354,7 +353,7 @@ foreign import ccall _non_local_exit_check
  -> IO CInt
 
 nonLocalExitCheck :: EmacsEnv -> IO EmacsFuncallExit
-nonLocalExitCheck env = 
+nonLocalExitCheck env =
   toEnum . fromIntegral <$> liftIO (_non_local_exit_check env)
 
 foreign import ccall _non_local_exit_signal
@@ -368,7 +367,7 @@ nonLocalExitSignal
   -> TypedEmacsValue EmacsSymbol
   -> EmacsValue
   -> IO ()
-nonLocalExitSignal env (TypedEmacsValue sym) val = 
+nonLocalExitSignal env (TypedEmacsValue sym) val =
   _non_local_exit_signal env sym val
 
 foreign import ccall _non_local_exit_throw
@@ -378,7 +377,7 @@ foreign import ccall _non_local_exit_throw
   -> IO ()
 
 nonLocalExitThrow :: EmacsEnv -> EmacsValue -> EmacsValue -> IO ()
-nonLocalExitThrow env sym val = 
+nonLocalExitThrow env sym val =
   _non_local_exit_throw env sym val
 
 foreign import ccall _non_local_exit_clear
@@ -386,21 +385,21 @@ foreign import ccall _non_local_exit_clear
   -> IO ()
 
 nonLocalExitClear :: EmacsEnv -> IO ()
-nonLocalExitClear env = 
+nonLocalExitClear env =
   _non_local_exit_clear env
 
--- nonLocalExitGet   
+-- nonLocalExitGet
 -- nonLocalExitCheck と何が違うのは、ExitReturn じゃないときに、例外データを
 -- 第二引数、第三引数に書き込んでくれるということ。
 -- もしExitReturnの場合、第二引数及び第三引数には何も書かれていない
--- 何が？？？  
+-- 何が？？？
 foreign import ccall _non_local_exit_get
   :: EmacsEnv
   -> Ptr EmacsValue
   -> Ptr EmacsValue
   -> IO CInt
 
--- EmacsFuncallExitReturn の場合は Nothingを返す 
+-- EmacsFuncallExitReturn の場合は Nothingを返す
 -- EmacsFuncallExit が ExitReturn のとき、peek しては駄目。
 nonLocalExitGet :: EmacsEnv -> IO (Maybe (EmacsFuncallExit,EmacsValue,EmacsValue))
 nonLocalExitGet env = do
@@ -428,7 +427,7 @@ foreign import ccall _funcall
   -> IO EmacsValue
 
 funcall
-  :: EmacsEnv 
+  :: EmacsEnv
   -> EmacsValue
   -> [EmacsValue]
   -> IO EmacsValue

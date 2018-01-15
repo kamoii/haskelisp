@@ -1,422 +1,413 @@
-module Emacs.Internal where
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
+module Emacs.Core
+  ( EmacsValue
+  , TypedEmacsValue
+  , EmacsSymbol, EmacsString, EmacsInteger, EmacsFunction
+  , unsafeType, untype
+  , Symbol(..)
+  , Doc(..)
+
+  , EmacsM
+  , WriteEmacsValue, ReadEmacsValue
+  , isEq
+  , isNil
+  , void'
+  , apply'
+  , call0', call1', call2', call3', call0, call1, call2, call3
+  , mkFun0, mkFun1, mkFun2
+  , mkIOFun0, mkIOFun1
+  , Fn0(..), Fn1(..), Fn2(..)
+  , IOFn0(..), IOFn1(..), IOFn2(..)
+  ) where
 
 import Prelude()
-import Protolude
-import Emacs.Type
-import Emacs.Core
+import Protolude hiding (Symbol)
+import Emacs.Internal hiding (isNil, intern)
+import qualified Emacs.Internal as I
+import Foreign.Ptr (nullPtr)
+import Foreign.StablePtr (castPtrToStablePtr)
 
--- ??何だこれ。
--- PersistentState といいたかったのかな？
--- ShareState のほうがいいかな？
+-- * EmacsM モナド
 --
--- A stable pointer is a reference to a Haskell expression that is
--- guaranteed not to be affected by garbage collection, i.e., it will
--- neither be deallocated nor will the value of the stable pointer
--- itself change during garbage collection (ordinary references may be
--- relocated during garbage collection). Consequently, stable pointers
--- can be passed to foreign code, which can treat it as an opaque
--- reference to a Haskell value.
---
---  * 指している対象がGCの影響を受けない
---  * リロケートもされない
---  * そのため foreign code に渡すことが可能
---
-data PState = PState
-  { symbolMap :: IORef (Map Text GlobalEmacsValue)
-  }
+-- Readerパターンにでも基づこうかと考えていたが、必要ないかな。
 
--- Stable Ptr は
-data Ctx = Ctx
-  { pstateStablePtr :: StablePtr PState
-  , pstate :: PState
-  , emacsEnv :: EmacsEnv
-  }
+newtype EmacsM a = EmacsM (ReaderT EmacsEnv IO a)
+  deriving (Functor, Applicative, Monad, MonadIO)
 
-type EmacsM =
-  ReaderT Ctx IO
+deriving instance MonadReader EmacsEnv EmacsM
 
--- 基本的に一度作成したコンテキストを使い回す。
--- ただし現状では別途コンテキストを作成して使ったとしても問題ない
--- initCtx :: MonadIO m => EmacsEnv -> m Ctx
--- initCtx env = do
---   pstate <- initState
---   pstatep <- liftIO $ newStablePtr pstate
---   return $ Ctx pstatep pstate env
---   where
---     initState :: MonadIO m => m PState
---     initState = do
---       mapRef <- liftIO $ newIORef mempty
---       return $ PState mapRef
--- 
--- getPStateStablePtr :: EmacsM (StablePtr PState)
--- getPStateStablePtr = pstateStablePtr <$> ask
--- 
--- getPState :: EmacsM PState
--- getPState = pstate <$> ask
--- 
--- getEnv :: EmacsM EmacsEnv
--- getEnv = emacsEnv <$> ask
+runEmacsM :: EmacsEnv -> EmacsM a -> IO a
+runEmacsM env (EmacsM act) = runReaderT act env
 
--- Logging here is not a good idea. When passing high order function,
--- which could be invoked manytimes, its get quite slow.
--- runEmacsM :: MonadIO m => Ctx -> EmacsM a -> m a
--- runEmacsM ctx action =
---   liftIO $ runReaderT action ctx
+liftEM :: (EmacsEnv -> a -> IO b) -> a -> EmacsM b
+liftEM f a = do
+  env <- ask
+  liftIO $ f env a
 
--- -- 関数の引数に ToEmacsValue を受け取るようにすると便利なんだけど、問
--- -- 題はその引数の実際の値を取得するめに EmacsM の中で実行する必要があ
--- -- り、引数の実行で例外が発生するかもしれない、ということ。
--- --
--- -- ある関数の中でEmacsException例外が発生したときにどのタイミングでど
--- -- こまで進んだかの保証が得られない。
--- -- ああ、けど IO での例外でも同じことが言えるのか...
---
--- -- fromTypedEmacsValue が実装できないものもある。
--- class CheckTypeEmacsValue (ET t) => ToTypedEmacsValue t where
---   type ET t :: EmacsType
---
---   toTypedEmacsValue :: t -> EmacsM (TypedEmacsValue (ET t))
---
---   toEmacsValue :: t -> EmacsM (EmacsValue)
---   toEmacsValue t = do
---     TypedEmacsValue ev :: TypedEmacsValue (ET t) <- toTypedEmacsValue t
---     return ev
---
---   toEv :: t -> EmacsM (EmacsValue)
---   toEv = toEmacsValue
---
---   fromTypedEmacsValue :: TypedEmacsValue (ET t) -> EmacsM t
---
---   fromEmacsValue :: EmacsValue -> EmacsM t
---   fromEmacsValue ev =
---     fromTypedEmacsValue =<< typeCheck ev
---
---   fromEv :: EmacsValue -> EmacsM t
---   fromEv = fromEmacsValue
---
--- -- 便宜上
--- instance ToTypedEmacsValue EmacsValue where
---   type ET EmacsValue = 'EUnkown
---   toEmacsValue = pure
---   toTypedEmacsValue = pure . TypedEmacsValue
---   fromEmacsValue = pure
---   fromTypedEmacsValue = pure . untype
---
--- -- 便宜上
--- instance CheckTypeEmacsValue et => ToTypedEmacsValue (TypedEmacsValue et) where
---   type ET (TypedEmacsValue et) = et
---   toTypedEmacsValue = pure
---   fromTypedEmacsValue = pure
---
--- instance ToTypedEmacsValue Int where
---   type ET Int = 'EInteger
---   toTypedEmacsValue = mkInteger
---   fromTypedEmacsValue = extractInteger
---
--- instance ToTypedEmacsValue Text where
---   type ET Text = 'EString
---   toTypedEmacsValue = mkString
---   fromTypedEmacsValue = extractString
---
--- instance ToTypedEmacsValue Keyword where
---   type ET Keyword = 'EKeyword
---   toTypedEmacsValue (Keyword t) =
---     TypedEmacsValue . untype <$> intern (":" <> t)
---
--- instance ToTypedEmacsValue Symbol where
---   type ET Symbol = 'ESymbol
---   toTypedEmacsValue (Symbol t) = intern t
---
--- instance Functionable f => ToTypedEmacsValue (Function f) where
---   type ET (Function f) = 'EFunction
---   toTypedEmacsValue (Function f) = mkFunctionFromFunctionable f
---
--- instance (FromEmacsValue a, Functionable b) => ToTypedEmacsValue (a -> b) where
---   type ET (a -> b) = 'EFunction
---   toTypedEmacsValue = mkFunctionFromFunctionable
---
--- instance (ToTypedEmacsValue a,ToTypedEmacsValue b) => ToTypedEmacsValue (a,b) where
---   type ET (a,b) = 'ECons
---   toTypedEmacsValue (a,b) = do
---     av <- toTypedEmacsValue a
---     bv <- toTypedEmacsValue b
---     mkCons av bv
---
--- instance ToEmacsValue x => ToTypedEmacsValue [x] where
---   type ET [x] = 'EList
---   toTypedEmacsValue xs = join $ mkList <$> mapM toEv xs
---
--- instance ToTypedEmacsValue () where
---   type ET () = 'ENil
---   toTypedEmacsValue _ = mkNil
---
--- instance ToTypedEmacsValue Bool where
---   type ET Bool = 'EBool
---   toTypedEmacsValue True  = mkT
---   toTypedEmacsValue False = TypedEmacsValue . untype <$> mkNil
---
--- type ToEmacsValue t = ToTypedEmacsValue t
--- type ToEmacsSymbol t = (ToTypedEmacsValue t, ET t ~ 'ESymbol)
--- type ToEmacsInteger t = (ToTypedEmacsValue t, ET t ~ 'EInteger)
--- type ToEmacsString t = (ToTypedEmacsValue t, ET t ~ 'EString)
--- type ToEmacsKeyword t = (ToTypedEmacsValue t, ET t ~ 'EKeyword)
--- type ToEmacsFunction t = (ToTypedEmacsValue t, ET t ~ 'EFunction)
---
--- type FromEmacsValue t = ToTypedEmacsValue t
+liftEM2 :: (EmacsEnv -> a -> b -> IO c) -> a -> b -> EmacsM c
+liftEM2 f a b = do
+  env <- ask
+  liftIO $ f env a b
 
--- -- EmacsValue -> TypedEmacsValue et
--- -- 排他的ではないことに注意
--- -- 変換できない場合は例外を投げる
--- -- TODO: type-of を使ったほうが早いかな？
--- class CheckTypeEmacsValue (et :: EmacsType) where
---   isTypeOf :: Proxy et -> EmacsValue -> EmacsM Bool
---   typeCheck :: EmacsValue -> EmacsM (TypedEmacsValue et)
--- 
--- typeCheckWithP :: Text -> EmacsValue -> EmacsM (TypedEmacsValue et)
--- typeCheckWithP p ev = do
---   b <- isNil =<< funcall1 p ev
---   if b
---     then error $ toS $ "type error with predicate function: " <> p
---     else pure $ TypedEmacsValue ev
--- 
--- -- opaque なまあ扱う。チェックは不要
--- instance CheckTypeEmacsValue 'EUnkown where
---   typeCheck = pure . TypedEmacsValue
--- 
--- instance CheckTypeEmacsValue 'ESymbol where
---   typeCheck = typeCheckWithP "symbolp"
--- 
--- instance CheckTypeEmacsValue 'EString where
---   typeCheck = typeCheckWithP "stringp"
--- 
--- instance CheckTypeEmacsValue 'EInteger where
---   typeCheck = typeCheckWithP "integerp"
--- 
--- instance CheckTypeEmacsValue 'ENil where
---   typeCheck ev =
---     isNil ev >>= bool (error "nil type error") (pure $ TypedEmacsValue ev)
--- 
--- instance CheckTypeEmacsValue 'EFunction where
---   typeCheck = typeCheckWithP "functionp"
--- 
--- instance CheckTypeEmacsValue 'ECons where
---   typeCheck = typeCheckWithP "consp"
--- 
--- instance CheckTypeEmacsValue 'EKeyword where
---   typeCheck = typeCheckWithP "keywordp"
--- 
--- -- TODO: どうするかな？
--- instance CheckTypeEmacsValue 'EBool where
---   typeCheck = undefined
--- 
--- -- TODO: listp は (1 . 2) とかでも t 返す。なので時前で確認する必要あり
--- instance CheckTypeEmacsValue 'EList where
---   typeCheck = typeCheckWithP "listp"
+liftEM3 :: (EmacsEnv -> a -> b -> c -> IO d) -> a -> b -> c -> EmacsM d
+liftEM3 f a b c = do
+  env <- ask
+  liftIO $ f env a b c
 
+isEq :: EmacsValue -> EmacsValue -> EmacsM Bool
+isEq = liftEM2 I.eq
+
+isNil :: EmacsValue -> EmacsM Bool
+isNil = liftEM I.isNil
+
+-- * ReadEmacsValue class
 --
--- class FromEmacsValue h where
---   fromEv :: EmacsValue -> EmacsM h
+-- Opaqueな型に変換する場合、型チェックを行なった上で変換すること。
 
--- instance FromEmacsValue EmacsValue where
---   fromEv = pure
+class ReadEmacsValue r where
+  readEmacsValue :: EmacsValue -> EmacsM r
 
--- String は ToEmacsValue との対象性の観点から止めたほうがよい。
--- String への変換が必要なのであれば先にTextに変換してからだな。
--- instance FromEmacsValue String where
---   fromEv = (toS<$>) . extractString
+newtype EmacsValueConversionException = EmacsValueConversionException Text
+  deriving (Show)
 
--- -- 多相的な関数は駄目らしい(具体的な関数ならokらしい)
--- -- TODO: optional, rest 引数に対応する。
--- class Functionable a where
---     call :: a -> [EmacsValue] -> EmacsM (Either Text EmacsValue)
---     arity :: a -> Int
--- 
--- instance {-# OVERLAPPING #-} ToEmacsValue a => Functionable a where
---     call a [] = Right <$> toEv a
---     call _ _  = pure $ Left "Too many arguments"
---     arity _ = 0
--- 
--- instance {-# OVERLAPPING #-} ToEmacsValue a => Functionable (IO a) where
---     call a [] = do
---       v <- liftIO a
---       Right <$> toEv v
---     call _ _  = pure $ Left "Too many arguments"
---     arity _ = 0
--- 
--- instance {-# OVERLAPPING #-} ToEmacsValue a => Functionable (EmacsM a) where
---     call am [] = do
---       a <- am
---       Right <$> toEv a
---     call _ _  = pure $ Left "Too many arguments"
---     arity _ = 0
--- 
--- instance {-# OVERLAPPING #-} (FromEmacsValue a, Functionable b) => Functionable (a -> b) where
---   call f (e:es) = do
---     av <- fromEv e
---     call (f av) es
---   call _ [] = pure $ Left "Too less arguments"
---   arity f = arity (f undefined) + 1
+instance Exception EmacsValueConversionException
 
--- 多相的な関数は怒られるはず。
-mkFunctionFromFunctionable :: Functionable f => f -> EmacsM EmacsFunction
-mkFunctionFromFunctionable f = do
-  let a = arity f
-  mkFunction func a a ""
-  where
-    func :: [EmacsValue] -> EmacsM EmacsValue
-    func es = do
-      res <- call f es
-      case res of
-        Right ev -> return ev
-        Left _   -> undefined
+instance ReadEmacsValue EmacsValue where
+  readEmacsValue = pure
 
--- -- Symbol or a Function
--- -- ただ シンボルに functoin が設定されているかどうかまでは確認しない。
--- -- Text も特別に便宜のため対応させる -> OverloadedString と相性が悪いので止め
+-- ** TypeEmacsValue 系の instance
+
+typeCheckWithP :: Text -> EmacsValue -> EmacsM (TypedEmacsValue et)
+typeCheckWithP p ev = do
+  b <- isNil =<< call1 p ev
+  if b
+    then throwIO $ EmacsValueConversionException $ "Failed:" <> p
+    else pure $ TypedEmacsValue ev
+
+instance ReadEmacsValue (TypedEmacsValue EmacsSymbol) where
+  readEmacsValue = typeCheckWithP "symbolp"
+
+instance ReadEmacsValue (TypedEmacsValue EmacsString) where
+  readEmacsValue = typeCheckWithP "stringp"
+
+instance ReadEmacsValue (TypedEmacsValue EmacsInteger) where
+  readEmacsValue = typeCheckWithP "integerp"
+
+instance ReadEmacsValue (TypedEmacsValue EmacsFunction) where
+  readEmacsValue = typeCheckWithP "functionp"
+
+-- ** emacsプリミティブ型 の instance
+
+instance ReadEmacsValue Text where
+  readEmacsValue = liftEM I.extractString . unsafeType
+
+instance ReadEmacsValue Int where
+  readEmacsValue = liftEM I.extractInteger . unsafeType
+
+instance ReadEmacsValue Symbol where
+  readEmacsValue ev = Symbol <$> call1 "symbol-name" ev
+
+-- emacs には bool 型は存在しないことに注意。
+-- nil のみが false, 他は真扱い。
+instance ReadEmacsValue Bool where
+  readEmacsValue ev = not <$> isNil ev
+
+-- ** Mabye instance: nil もしくは 値がある場合に使う
+
+instance ReadEmacsValue r => ReadEmacsValue (Maybe r) where
+  readEmacsValue ev = do
+    v <- isNil ev
+    if v
+      then pure Nothing
+      else Just <$> readEmacsValue ev
+
+-- * WriteEmacsValue class
+
+class WriteEmacsValue w where
+  writeEmacsValue :: w -> EmacsM EmacsValue
+
+instance WriteEmacsValue EmacsValue where
+  writeEmacsValue = pure
+
+instance WriteEmacsValue (TypedEmacsValue et) where
+  writeEmacsValue = pure . untype
+
+instance WriteEmacsValue Symbol where
+  writeEmacsValue (Symbol s) = untype <$> liftEM I.intern s
+
+instance WriteEmacsValue Text where
+  writeEmacsValue t = untype <$> liftEM I.makeString t
+
+-- emacs には Bool 型はないことに注意
+instance WriteEmacsValue Bool where
+  writeEmacsValue True = mkT
+  writeEmacsValue False = mkNil
+
+instance WriteEmacsValue () where
+  writeEmacsValue _ = mkNil
+
+instance WriteEmacsValue a => WriteEmacsValue [a] where
+  writeEmacsValue evs =
+    mkList =<< traverse writeEmacsValue evs
+
+instance WriteEmacsValue a => WriteEmacsValue (Maybe a) where
+  writeEmacsValue Nothing = mkNil
+  writeEmacsValue (Just a) = writeEmacsValue a
+
+-- * funcall: 関数呼び出しの効率化
+
+-- Symbol or a Function
+-- ただ シンボルに functoin が設定されているかどうかまでは確認しない。
+-- Text も特別に便宜のため対応させる -> OverloadedString と相性が悪いので止め
 class EmacsCallable c where
   toCallableEmacsValue :: c -> EmacsM EmacsValue
--- instance EmacsCallable Symbol
--- instance EmacsCallable (TypedEmacsValue EmacsSymbol)
--- instance EmacsCallable (TypedEmacsValue EmacsFunction)
 
--- Function call Utilities
--- 多くの場合、文字列で関数を起動したいため、'なしでは Text で起動できるようにする。
-funcall1'
-  :: (EmacsCallable f,ToEmacsValue a)
+instance EmacsCallable Symbol where
+  toCallableEmacsValue = writeEmacsValue
+instance EmacsCallable (TypedEmacsValue EmacsSymbol) where
+  toCallableEmacsValue = writeEmacsValue
+instance EmacsCallable (TypedEmacsValue EmacsFunction) where
+  toCallableEmacsValue = writeEmacsValue
+
+-- call
+void' :: EmacsM EmacsValue -> EmacsM ()
+void' = void
+
+apply'
+  :: (EmacsCallable f, ReadEmacsValue r)
+  => f
+  -> [EmacsValue]
+  -> EmacsM r
+apply' f args = do
+  let r = liftEM2 funcall <$> (toCallableEmacsValue f) <*> (pure args)
+  readEmacsValue =<< join r
+
+call0'
+  :: (EmacsCallable f, ReadEmacsValue r)
+  => f
+  -> EmacsM r
+call0' f = do
+  apply' f []
+
+call0
+  :: (ReadEmacsValue r)
+  => Text
+  -> EmacsM r
+call0 fname = call0' (Symbol fname)
+
+call1'
+  :: (EmacsCallable f, WriteEmacsValue a, ReadEmacsValue r)
   => f
   -> a
-  -> EmacsM EmacsValue
-funcall1' f ev0 =
-  join $ funcall <$> toEv f <*> sequence [toEv ev0]
+  -> EmacsM r
+call1' f ev0 = do
+  args <- sequence [writeEmacsValue ev0]
+  apply' f args
 
-funcall1
-  :: ToEmacsValue a
+call1
+  :: (WriteEmacsValue a, ReadEmacsValue r)
   => Text
   -> a
-  -> EmacsM EmacsValue
-funcall1 fname ev0 =
-  funcall1' (Symbol fname) ev0
+  -> EmacsM r
+call1 fname = call1' (Symbol fname)
 
-funcall2'
-  :: (EmacsCallable f,ToEmacsValue a, ToEmacsValue b)
+call2'
+  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, ReadEmacsValue r)
   => f
   -> a
   -> b
-  -> EmacsM EmacsValue
-funcall2' f ev0 ev1 =
-  join $ funcall <$> toEv f <*> sequence [toEv ev0, toEv ev1]
+  -> EmacsM r
+call2' f ev0 ev1 = do
+  args <- sequence [writeEmacsValue ev0, writeEmacsValue ev1]
+  apply' f args
 
-funcall2
-  :: (ToEmacsValue a, ToEmacsValue b)
+call2
+  :: (WriteEmacsValue a, WriteEmacsValue b, ReadEmacsValue r)
   => Text
   -> a
   -> b
-  -> EmacsM EmacsValue
-funcall2 fname ev0 ev1 =
-  funcall2' (Symbol fname) ev0 ev1
+  -> EmacsM r
+call2 fname = call2' (Symbol fname)
 
-funcall3
-  :: (ToEmacsValue a, ToEmacsValue b, ToEmacsValue c)
-  => Text
+call3'
+  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, WriteEmacsValue c, ReadEmacsValue r)
+  => f
   -> a
   -> b
   -> c
-  -> EmacsM EmacsValue
-funcall3 fname ev0 ev1 ev2 =
-  join $ funcall <$> (untype <$> intern fname)
-                 <*> sequence [toEv ev0, toEv ev1, toEv ev2]
+  -> EmacsM r
+call3' f ev0 ev1 ev2 = do
+  args <- sequence [writeEmacsValue ev0, writeEmacsValue ev1, writeEmacsValue ev2]
+  apply' f args
 
-callInteractively :: Text -> EmacsM EmacsValue
+call3 fname = call3' (Symbol fname)
+
+callInteractively
+  :: (ReadEmacsValue r)
+  => Text
+  -> EmacsM r
 callInteractively fname =
-  funcall1 "call-interactively" (Symbol fname)
+  call1 "call-interactively" (Symbol fname)
 
+-- * 関数作成
 
+mkFun1'
+  :: (ReadEmacsValue a)
+  => (r -> EmacsM EmacsValue)
+  -> Doc
+  -> (a -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun1' conv doc f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' 1 1 doc (castPtrToStablePtr nullPtr)
+  where
+    -- 引数が一つであることは、arityの設定により Emacs が保証してくれるはず？
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ [arg0'] = runEmacsM env $ do
+      arg0 <- readEmacsValue arg0'
+      conv $ f arg0
+
+-- ** 0 と 2 以上の arity分
+
+mkFun0'
+  :: (r -> EmacsM EmacsValue)
+  -> Doc
+  -> r
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun0' conv doc f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' 0 0 doc (castPtrToStablePtr nullPtr)
+  where
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ [] = runEmacsM env $ do
+      conv $ f
+
+mkFun2'
+  :: (ReadEmacsValue a, ReadEmacsValue b)
+  => (r -> EmacsM EmacsValue)
+  -> Doc
+  -> (a -> b -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun2' conv doc f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' 2 2 doc (castPtrToStablePtr nullPtr)
+  where
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ [arg0', arg1'] = runEmacsM env $ do
+      arg0 <- readEmacsValue arg0'
+      arg1 <- readEmacsValue arg1'
+      conv $ f arg0 arg1
+
+mkFun3'
+  :: (ReadEmacsValue a, ReadEmacsValue b, ReadEmacsValue c)
+  => (r -> EmacsM EmacsValue)
+  -> Doc
+  -> (a -> b -> c -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun3' conv doc f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' 3 3 doc (castPtrToStablePtr nullPtr)
+  where
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ [arg0', arg1', arg2'] = runEmacsM env $ do
+      arg0 <- readEmacsValue arg0'
+      arg1 <- readEmacsValue arg1'
+      arg2 <- readEmacsValue arg2'
+      conv $ f arg0 arg1 arg2
+
+mkFun4'
+  :: (ReadEmacsValue a, ReadEmacsValue b, ReadEmacsValue c, ReadEmacsValue d)
+  => (r -> EmacsM EmacsValue)
+  -> Doc
+  -> (a -> b -> c -> d -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun4' conv doc f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' 4 4 doc (castPtrToStablePtr nullPtr)
+  where
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ [arg0', arg1', arg2', arg3'] = runEmacsM env $ do
+      arg0 <- readEmacsValue arg0'
+      arg1 <- readEmacsValue arg1'
+      arg2 <- readEmacsValue arg2'
+      arg3 <- readEmacsValue arg3'
+      conv $ f arg0 arg1 arg2 arg3
+
+-- ** 純粋関数: mkFun*
+
+mkFun0 :: (WriteEmacsValue r) => Doc -> r -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun0 = mkFun0' writeEmacsValue
+mkFun1 :: (ReadEmacsValue a, WriteEmacsValue r) => Doc -> (a -> r) -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun1 = mkFun1' writeEmacsValue
+mkFun2 :: (ReadEmacsValue a, ReadEmacsValue b, WriteEmacsValue r) => Doc -> (a -> b -> r) -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun2 = mkFun2' writeEmacsValue
+
+-- ** IO関数: mkIOFun*
+
+class EmacsMonad m where liftToEmacsM :: m a -> EmacsM a
+instance EmacsMonad IO where liftToEmacsM = liftIO
+instance EmacsMonad EmacsM  where liftToEmacsM = identity
+
+mkIOFun0 :: (WriteEmacsValue r, EmacsMonad m) => Doc -> m r -> EmacsM (TypedEmacsValue EmacsFunction)
+mkIOFun0 = mkFun0' (\r -> writeEmacsValue =<< liftToEmacsM r)
+mkIOFun1 :: (ReadEmacsValue a, WriteEmacsValue r, EmacsMonad m) => Doc -> (a -> m r) -> EmacsM (TypedEmacsValue EmacsFunction)
+mkIOFun1 = mkFun1' (\r -> writeEmacsValue =<< liftToEmacsM r)
+
+-- * 関数型 Fn, IOFn
+
+newtype Fn0 r = Fn0 r
+newtype Fn1 a r = Fn1 (a -> r)
+newtype Fn2 a b r = Fn2 (a -> b -> r)
+
+newtype IOFn0 m r = IOFn0 (m r)
+newtype IOFn1 m a r = IOFn1 (a -> m r)
+newtype IOFn2 m a b r = IOFn2 (a -> b -> m r)
+
+instance (EmacsMonad m, ReadEmacsValue a, WriteEmacsValue r)
+      => WriteEmacsValue (IOFn1 m a r) where
+  writeEmacsValue (IOFn1 f) = untype <$> mkIOFun1 (Doc "") f
+
+-- * その他
+
+-- nil 型は存在しない
 -- 単一の値しかないので引数は不要。どうやって取得するだろ？
 -- nil という定数が nil を持っている。
 -- (symbol-value 'nil) でいけるかな。(eval 'nil) でもいいかも
 --
 -- TODO: キャッシュするべきだよね(キャッシュする場合は emacs_value を
 -- emacs側でGCされないように global_ref を作る必要があるのかな？
-mkNil :: EmacsM EmacsNil
-mkNil =
-  TypedEmacsValue <$> funcall1 "symbol-value" (Symbol "nil")
+mkNil :: EmacsM EmacsValue
+mkNil = call1 "symbol-value" (Symbol "nil")
 
-mkT :: EmacsM EmacsBool
-mkT =
-  TypedEmacsValue <$> funcall1 "symbol-value" (Symbol "t")
+-- Emacs には boolean型は存在しない。
+-- nil が false、nil以外が true と見做される。
+-- ただ慣習として t シンボルが true の値として良く利用される。
+mkT :: EmacsM EmacsValue
+mkT = call1 "symbol-value" (Symbol "t")
 
 -- そもそも list という型は emacs側には存在しない。
 -- listp という関数があるが、これは cons もしくは nil かどうかを判定している。
-mkList :: [EmacsValue] -> EmacsM EmacsList
-mkList evs = do
-  listQ <- intern "list"
-  TypedEmacsValue <$> funcall (untype listQ) evs
+mkList :: [EmacsValue] -> EmacsM EmacsValue
+mkList evs = apply' (Symbol "list") evs
 
-provide :: ToEmacsSymbol s => s -> EmacsM ()
-provide feature =
-  void $ funcall1 "provide" feature
-
-message :: Text -> EmacsM ()
-message t =
-  void $ funcall1 "message" t
-
-print :: ToEmacsValue v => v -> EmacsM ()
-print ev =
-  void $ funcall1 "print" ev
-
-mkCons
-  :: (ToEmacsValue a, ToEmacsValue b)
-  => a
-  -> b
-  -> EmacsM EmacsCons
-mkCons a b =
-  TypedEmacsValue <$> funcall2 "cons" a b
-
-car :: EmacsCons -> EmacsM EmacsValue
-car = funcall1 "car"
-
-cdr :: EmacsCons -> EmacsM EmacsValue
-cdr = funcall1 "cdr"
-
--- `read-from-string` が失敗した場合は例外投げるので cons かどうかの確
--- 認は不要。
-evalString :: Text -> EmacsM EmacsValue
-evalString t =
-  funcall1 "eval" =<< (car . typeUnsafe =<< funcall1 "read-from-string" t)
-
--- emacsModuleInit に渡す関数
--- TODO: move to Module.hs
-defmodule :: Text -> EmacsM a -> EmacsModule
-defmodule name mod ert = do
-  env <- getEmacsEnvFromRT ert
-  errorHandle env $ do
-    ctx <- initCtx env
-    runEmacsM ctx $ mod >> funcall1 "provide" (Symbol name)
-  return 0
-
--- TODO: キャッシュするのは不味い気がしてきた。滅多にないとは思うけど、
--- unintern された場合にの動きが問題となる。
--- intern :: Text -> EmacsM (TypedEmacsValue EmacsSymbol)
--- intern str = do
---   s' <- lookupCache
---   TypedEmacsValue <$> case s' of
---     Just gev ->
---       return (castGlobalToEmacsValue gev)
---     Nothing ->
---       storeToCache =<< create
---   where
---     lookupCache = do
---       mapRef <- symbolMap <$> getPState
---       map <- liftIO $ readIORef mapRef
---       return $ Map.lookup str map
--- 
---     -- TODO: 現在は全部入れているけど、これはまずい
---     storeToCache ev = do
---       mapRef <- symbolMap <$> getPState
---       gev <- mkGlobalRef ev
---       liftIO $ modifyIORef mapRef (Map.insert str gev)
---       return (castGlobalToEmacsValue gev)
--- 
---     create = do
---       env <- getEnv
---       checkExitStatus . withCString (toS str) $ \cstr -> _intern env cstr
+-- -- `read-from-string` が失敗した場合は例外投げるので cons かどうかの確
+-- -- 認は不要。
+-- evalString :: Text -> EmacsM EmacsValue
+-- evalString t =
+--   funcall1 "eval" =<< (car . typeUnsafe =<< funcall1 "read-from-string" t)
+--
+-- -- emacsModuleInit に渡す関数
+-- -- TODO: move to Module.hs
+-- defmodule :: Text -> EmacsM a -> EmacsModule
+-- defmodule name mod ert = do
+--   env <- getEmacsEnvFromRT ert
+--   errorHandle env $ do
+--     ctx <- initCtx env
+--     runEmacsM ctx $ mod >> funcall1 "provide" (Symbol name)
+--   return 0
+--
