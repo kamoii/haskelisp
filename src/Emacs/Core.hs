@@ -8,21 +8,27 @@ module Emacs.Core
   ( EmacsValue
   , TypedEmacsValue
   , EmacsSymbol, EmacsString, EmacsInteger, EmacsFunction
-  , unsafeType, untype
-  , Symbol(..)
   , Doc(..)
-
+  , unsafeType, untype
   , EmacsM
-  , WriteEmacsValue, ReadEmacsValue
   , isEq
   , isNil
-  , void'
+  -- , mkNil
+  -- , mkList
+  -- , mkString
+  -- , mkInteger
+  -- , intern
+  -- mk系、read系足す？？
+  -- readEV, writeEV は公開すべきなのか？？？
+  -- mkFunの中だけで利用するべきだけでは？？
+  , WriteEmacsValue(..), ReadEmacsValue(..)
   , apply'
   , call0', call1', call2', call3', call0, call1, call2, call3
   , mkFun0, mkFun1, mkFun2
   , mkIOFun0, mkIOFun1
   , Fn0(..), Fn1(..), Fn2(..)
   , IOFn0(..), IOFn1(..), IOFn2(..)
+  , Symbol(..)
   ) where
 
 import Prelude()
@@ -70,7 +76,7 @@ isNil = liftEM I.isNil
 -- Opaqueな型に変換する場合、型チェックを行なった上で変換すること。
 
 class ReadEmacsValue r where
-  readEmacsValue :: EmacsValue -> EmacsM r
+  readEV :: EmacsValue -> EmacsM r
 
 newtype EmacsValueConversionException = EmacsValueConversionException Text
   deriving (Show)
@@ -78,7 +84,7 @@ newtype EmacsValueConversionException = EmacsValueConversionException Text
 instance Exception EmacsValueConversionException
 
 instance ReadEmacsValue EmacsValue where
-  readEmacsValue = pure
+  readEV = pure
 
 -- ** TypeEmacsValue 系の instance
 
@@ -90,74 +96,80 @@ typeCheckWithP p ev = do
     else pure $ TypedEmacsValue ev
 
 instance ReadEmacsValue (TypedEmacsValue EmacsSymbol) where
-  readEmacsValue = typeCheckWithP "symbolp"
+  readEV = typeCheckWithP "symbolp"
 
 instance ReadEmacsValue (TypedEmacsValue EmacsString) where
-  readEmacsValue = typeCheckWithP "stringp"
+  readEV = typeCheckWithP "stringp"
 
 instance ReadEmacsValue (TypedEmacsValue EmacsInteger) where
-  readEmacsValue = typeCheckWithP "integerp"
+  readEV = typeCheckWithP "integerp"
 
 instance ReadEmacsValue (TypedEmacsValue EmacsFunction) where
-  readEmacsValue = typeCheckWithP "functionp"
+  readEV = typeCheckWithP "functionp"
 
 -- ** emacsプリミティブ型 の instance
 
 instance ReadEmacsValue Text where
-  readEmacsValue = liftEM I.extractString . unsafeType
+  readEV = liftEM I.extractString . unsafeType
 
 instance ReadEmacsValue Int where
-  readEmacsValue = liftEM I.extractInteger . unsafeType
+  readEV = liftEM I.extractInteger . unsafeType
 
 instance ReadEmacsValue Symbol where
-  readEmacsValue ev = Symbol <$> call1 "symbol-name" ev
+  readEV ev = Symbol <$> (readEV =<< call1 "symbol-name" ev)
+
+instance ReadEmacsValue () where
+  readEV ev =
+    ifM (isNil ev)      
+      (pure ())
+      (throwIO $ EmacsValueConversionException "not nil")
 
 -- emacs には bool 型は存在しないことに注意。
 -- nil のみが false, 他は真扱い。
 instance ReadEmacsValue Bool where
-  readEmacsValue ev = not <$> isNil ev
+  readEV ev = not <$> isNil ev
 
 -- ** Mabye instance: nil もしくは 値がある場合に使う
 
 instance ReadEmacsValue r => ReadEmacsValue (Maybe r) where
-  readEmacsValue ev = do
+  readEV ev = do
     v <- isNil ev
     if v
       then pure Nothing
-      else Just <$> readEmacsValue ev
+      else Just <$> readEV ev
 
 -- * WriteEmacsValue class
 
 class WriteEmacsValue w where
-  writeEmacsValue :: w -> EmacsM EmacsValue
+  writeEV :: w -> EmacsM EmacsValue
 
 instance WriteEmacsValue EmacsValue where
-  writeEmacsValue = pure
+  writeEV = pure
 
 instance WriteEmacsValue (TypedEmacsValue et) where
-  writeEmacsValue = pure . untype
+  writeEV = pure . untype
 
 instance WriteEmacsValue Symbol where
-  writeEmacsValue (Symbol s) = untype <$> liftEM I.intern s
+  writeEV (Symbol s) = untype <$> liftEM I.intern s
 
 instance WriteEmacsValue Text where
-  writeEmacsValue t = untype <$> liftEM I.makeString t
+  writeEV t = untype <$> liftEM I.makeString t
 
 -- emacs には Bool 型はないことに注意
 instance WriteEmacsValue Bool where
-  writeEmacsValue True = mkT
-  writeEmacsValue False = mkNil
+  writeEV True = mkT
+  writeEV False = mkNil
 
 instance WriteEmacsValue () where
-  writeEmacsValue _ = mkNil
+  writeEV _ = mkNil
 
 instance WriteEmacsValue a => WriteEmacsValue [a] where
-  writeEmacsValue evs =
-    mkList =<< traverse writeEmacsValue evs
+  writeEV evs =
+    mkList =<< traverse writeEV evs
 
 instance WriteEmacsValue a => WriteEmacsValue (Maybe a) where
-  writeEmacsValue Nothing = mkNil
-  writeEmacsValue (Just a) = writeEmacsValue a
+  writeEV Nothing = mkNil
+  writeEV (Just a) = writeEV a
 
 -- * funcall: 関数呼び出しの効率化
 
@@ -168,89 +180,79 @@ class EmacsCallable c where
   toCallableEmacsValue :: c -> EmacsM EmacsValue
 
 instance EmacsCallable Symbol where
-  toCallableEmacsValue = writeEmacsValue
+  toCallableEmacsValue = writeEV
 instance EmacsCallable (TypedEmacsValue EmacsSymbol) where
-  toCallableEmacsValue = writeEmacsValue
+  toCallableEmacsValue = writeEV
 instance EmacsCallable (TypedEmacsValue EmacsFunction) where
-  toCallableEmacsValue = writeEmacsValue
+  toCallableEmacsValue = writeEV
 
--- call
-void' :: EmacsM EmacsValue -> EmacsM ()
-void' = void
+-- apply/call
+--
+-- 最初は返値も ReadEmacsValue を用いて多相的に書いていたのだが、
+--
+--   * EmacsM () のために Nilの導入
+--   * void' が必要に
+--   * 自分の足を打ち抜きそうになるので
+--
+-- 多相的な結果型って何かアンチパターンの匂いがするんだけど、あまり言及見つからないな...
 
 apply'
-  :: (EmacsCallable f, ReadEmacsValue r)
+  :: (EmacsCallable f)
   => f
   -> [EmacsValue]
-  -> EmacsM r
+  -> EmacsM EmacsValue
 apply' f args = do
   let r = liftEM2 funcall <$> (toCallableEmacsValue f) <*> (pure args)
-  readEmacsValue =<< join r
+  readEV =<< join r
 
 call0'
-  :: (EmacsCallable f, ReadEmacsValue r)
+  :: (EmacsCallable f)
   => f
-  -> EmacsM r
+  -> EmacsM EmacsValue
 call0' f = do
   apply' f []
 
-call0
-  :: (ReadEmacsValue r)
-  => Text
-  -> EmacsM r
 call0 fname = call0' (Symbol fname)
 
 call1'
-  :: (EmacsCallable f, WriteEmacsValue a, ReadEmacsValue r)
+  :: (EmacsCallable f, WriteEmacsValue a)
   => f
   -> a
-  -> EmacsM r
+  -> EmacsM EmacsValue
 call1' f ev0 = do
-  args <- sequence [writeEmacsValue ev0]
+  args <- sequence [writeEV ev0]
   apply' f args
 
-call1
-  :: (WriteEmacsValue a, ReadEmacsValue r)
-  => Text
-  -> a
-  -> EmacsM r
 call1 fname = call1' (Symbol fname)
 
 call2'
-  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, ReadEmacsValue r)
+  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b)
   => f
   -> a
   -> b
-  -> EmacsM r
+  -> EmacsM EmacsValue
 call2' f ev0 ev1 = do
-  args <- sequence [writeEmacsValue ev0, writeEmacsValue ev1]
+  args <- sequence [writeEV ev0, writeEV ev1]
   apply' f args
 
-call2
-  :: (WriteEmacsValue a, WriteEmacsValue b, ReadEmacsValue r)
-  => Text
-  -> a
-  -> b
-  -> EmacsM r
 call2 fname = call2' (Symbol fname)
 
 call3'
-  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, WriteEmacsValue c, ReadEmacsValue r)
+  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, WriteEmacsValue c)
   => f
   -> a
   -> b
   -> c
-  -> EmacsM r
+  -> EmacsM EmacsValue
 call3' f ev0 ev1 ev2 = do
-  args <- sequence [writeEmacsValue ev0, writeEmacsValue ev1, writeEmacsValue ev2]
+  args <- sequence [writeEV ev0, writeEV ev1, writeEV ev2]
   apply' f args
 
 call3 fname = call3' (Symbol fname)
 
 callInteractively
-  :: (ReadEmacsValue r)
-  => Text
-  -> EmacsM r
+  :: Text
+  -> EmacsM EmacsValue
 callInteractively fname =
   call1 "call-interactively" (Symbol fname)
 
@@ -269,7 +271,7 @@ mkFun1' conv doc f = do
     -- 引数が一つであることは、arityの設定により Emacs が保証してくれるはず？
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ [arg0'] = runEmacsM env $ do
-      arg0 <- readEmacsValue arg0'
+      arg0 <- readEV arg0'
       conv $ f arg0
 
 -- ** 0 と 2 以上の arity分
@@ -299,8 +301,8 @@ mkFun2' conv doc f = do
   where
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ [arg0', arg1'] = runEmacsM env $ do
-      arg0 <- readEmacsValue arg0'
-      arg1 <- readEmacsValue arg1'
+      arg0 <- readEV arg0'
+      arg1 <- readEV arg1'
       conv $ f arg0 arg1
 
 mkFun3'
@@ -315,9 +317,9 @@ mkFun3' conv doc f = do
   where
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ [arg0', arg1', arg2'] = runEmacsM env $ do
-      arg0 <- readEmacsValue arg0'
-      arg1 <- readEmacsValue arg1'
-      arg2 <- readEmacsValue arg2'
+      arg0 <- readEV arg0'
+      arg1 <- readEV arg1'
+      arg2 <- readEV arg2'
       conv $ f arg0 arg1 arg2
 
 mkFun4'
@@ -332,20 +334,20 @@ mkFun4' conv doc f = do
   where
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ [arg0', arg1', arg2', arg3'] = runEmacsM env $ do
-      arg0 <- readEmacsValue arg0'
-      arg1 <- readEmacsValue arg1'
-      arg2 <- readEmacsValue arg2'
-      arg3 <- readEmacsValue arg3'
+      arg0 <- readEV arg0'
+      arg1 <- readEV arg1'
+      arg2 <- readEV arg2'
+      arg3 <- readEV arg3'
       conv $ f arg0 arg1 arg2 arg3
 
 -- ** 純粋関数: mkFun*
 
 mkFun0 :: (WriteEmacsValue r) => Doc -> r -> EmacsM (TypedEmacsValue EmacsFunction)
-mkFun0 = mkFun0' writeEmacsValue
+mkFun0 = mkFun0' writeEV
 mkFun1 :: (ReadEmacsValue a, WriteEmacsValue r) => Doc -> (a -> r) -> EmacsM (TypedEmacsValue EmacsFunction)
-mkFun1 = mkFun1' writeEmacsValue
+mkFun1 = mkFun1' writeEV
 mkFun2 :: (ReadEmacsValue a, ReadEmacsValue b, WriteEmacsValue r) => Doc -> (a -> b -> r) -> EmacsM (TypedEmacsValue EmacsFunction)
-mkFun2 = mkFun2' writeEmacsValue
+mkFun2 = mkFun2' writeEV
 
 -- ** IO関数: mkIOFun*
 
@@ -354,9 +356,9 @@ instance EmacsMonad IO where liftToEmacsM = liftIO
 instance EmacsMonad EmacsM  where liftToEmacsM = identity
 
 mkIOFun0 :: (WriteEmacsValue r, EmacsMonad m) => Doc -> m r -> EmacsM (TypedEmacsValue EmacsFunction)
-mkIOFun0 = mkFun0' (\r -> writeEmacsValue =<< liftToEmacsM r)
+mkIOFun0 = mkFun0' (\r -> writeEV =<< liftToEmacsM r)
 mkIOFun1 :: (ReadEmacsValue a, WriteEmacsValue r, EmacsMonad m) => Doc -> (a -> m r) -> EmacsM (TypedEmacsValue EmacsFunction)
-mkIOFun1 = mkFun1' (\r -> writeEmacsValue =<< liftToEmacsM r)
+mkIOFun1 = mkFun1' (\r -> writeEV =<< liftToEmacsM r)
 
 -- * 関数型 Fn, IOFn
 
@@ -370,11 +372,12 @@ newtype IOFn2 m a b r = IOFn2 (a -> b -> m r)
 
 instance (EmacsMonad m, ReadEmacsValue a, WriteEmacsValue r)
       => WriteEmacsValue (IOFn1 m a r) where
-  writeEmacsValue (IOFn1 f) = untype <$> mkIOFun1 (Doc "") f
+  writeEV (IOFn1 f) = untype <$> mkIOFun1 (Doc "") f
 
 -- * その他
 
 -- nil 型は存在しない
+-- また nil 値はプロパティを持っていないため、opaque な値を用意する必要はない。  
 -- 単一の値しかないので引数は不要。どうやって取得するだろ？
 -- nil という定数が nil を持っている。
 -- (symbol-value 'nil) でいけるかな。(eval 'nil) でもいいかも

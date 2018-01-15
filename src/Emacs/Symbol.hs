@@ -13,7 +13,7 @@ import Data.IORef
 allSymbols :: EmacsM [EmacsValue]
 allSymbols = do
   ref <- liftIO $ newIORef []
-  void' $ call1 "mapatoms" (IOFn1 (accum ref))
+  call1 "mapatoms" (IOFn1 (accum ref))
   liftIO $ readIORef ref
   where
     accum :: IORef [EmacsValue] -> EmacsValue -> IO ()
@@ -27,7 +27,7 @@ allSymbols = do
 --  4. property list (* can have buffer local list)
 
 getSymbolName :: Text -> EmacsM Text
-getSymbolName name = call1 "symbol-name" (Symbol name)
+getSymbolName name = readEV =<< call1 "symbol-name" (Symbol name)
 
 setValue :: WriteEmacsValue a => Text -> a -> EmacsM EmacsValue
 setValue name val = call2 "set" (Symbol name) val
@@ -35,15 +35,15 @@ setValue name val = call2 "set" (Symbol name) val
 --  関数の設定
 -- 一番 low level なのが setFunction
 setFunction :: Text -> TypedEmacsValue EmacsFunction -> EmacsM ()
-setFunction name f = void' $ call2 "fset" (Symbol name) f
+setFunction name f = void $ call2 "fset" (Symbol name) f
 
 -- Could throw exception if the symbol is not setted.
-getValue :: ReadEmacsValue r => Text -> EmacsM r
+getValue :: Text -> EmacsM EmacsValue
 getValue name = call1 "symbol-value" (Symbol name)
 
 -- if Symbol exists (included in obarray) and a value is bounded.
 isBounded :: Text -> EmacsM Bool
-isBounded name = call1 "boundp" (Symbol name)
+isBounded name = readEV =<< call1 "boundp" (Symbol name)
 
 -- Buffer local
 --
