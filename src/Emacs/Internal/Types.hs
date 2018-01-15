@@ -78,11 +78,6 @@ data EmacsInteger
 data EmacsString   
 data EmacsFunction 
 
--- Emacs の値に対する Haskell の型
--- 数値や文字列は素直なんだけど、他
--- Nil は空 [] でいいのかな？
-newtype Symbol = Symbol Text
-
 -- 例外機構
 
 data EmacsFuncallExit

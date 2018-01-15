@@ -71,6 +71,11 @@ isEq = liftEM2 I.eq
 isNil :: EmacsValue -> EmacsM Bool
 isNil = liftEM I.isNil
 
+-- Emacs の値に対する Haskell の型
+-- 数値や文字列は素直なんだけど、他
+-- Nil は空 [] でいいのかな？
+newtype Symbol = Symbol Text
+
 -- * ReadEmacsValue class
 --
 -- Opaqueな型に変換する場合、型チェックを行なった上で変換すること。
