@@ -9,12 +9,11 @@ import Emacs.Internal
 foreign export ccall "emacs_module_init" emacsModuleInit :: EmacsModule
 
 emacsModuleInit :: EmacsModule
-emacsModuleInit ert = do
-  env <- getEmacsEnvFromRT ert
+emacsModuleInit = emacsModule $ \env -> do
   str <- makeString env "this is a simple test"
   sym <- intern env "message"
   funcall env (untype sym) [untype str]
-  pure 0
+  pure ()
 
 main :: IO ()
 main = undefined

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 module Emacs.Internal.FFI
-  ( getEmacsEnvFromRT
+  ( emacsModule
   -- , typeOf
   -- , isTypeOf
   , eq
@@ -46,6 +46,13 @@ foreign import ccall _type_of
   :: EmacsEnv
   -> EmacsValue
   -> IO EmacsValue
+
+emacsModule :: (EmacsEnv -> IO ()) -> EmacsModule
+emacsModule act er = do
+  env <- getEmacsEnvFromRT er
+  errorHandle env (act env) >>= \case
+    Just _ -> pure 0
+    Nothing -> pure 1
 
 -- 現状利用不可。
 -- 問題は EmacsType と一対一で対応しない。isTypeOf は使えるかもしれないが、あまり意味はないかな...
@@ -185,10 +192,18 @@ makeFunction env func minArity' maxArity' (Doc doc') datap = do
     -- stub はクロージャにすると不味い? 例えば EmacsValue -> EFunctionStub とか
     -- いや大丈夫なはず。現に func は外側にあるし(本当か？？)
     -- GCが関係しているはず。
+    --
+    -- emacs-module.c の funcall_module 関数が 作った関数を呼び出すものだが、
+    -- throw/signal されている場合は 返値の値は利用されていないようだ。
+    -- そのため例外が発生した場合、返す EmacsValue はヌルポでも良いはず。(たぶん)
     stub :: EFunctionStub a
-    stub env nargs args datap = errorHandle env $ do
-      evArgs <- fmap EmacsValue <$> peekArray (fromIntegral nargs) args
-      func env datap evArgs
+    stub env nargs args datap = do
+      v <- errorHandle env $ do
+        evArgs <- fmap EmacsValue <$> peekArray (fromIntegral nargs) args
+        func env datap evArgs
+      case v of
+        Just ev -> pure ev
+        Nothing -> pure $ EmacsValue nullPtr
 
 -- Haskell で投げられた例外の対応
 --
@@ -221,37 +236,38 @@ makeFunction env func minArity' maxArity' (Doc doc') datap = do
 -- catch する順番重要
 errorHandle
   :: EmacsEnv
-  -> IO EmacsValue
-  -> IO EmacsValue
+  -> IO a
+  -> IO (Maybe a)
 errorHandle env action =
-  action `catch` emacsExceptionHandler
-         `catch` haskellExceptionHandler
+  (Just <$> action)
+    `catch` (\e -> emacsExceptionHandler e *> pure Nothing)
+    `catch` (\e -> haskellExceptionHandler e *> pure Nothing)
   where
     -- Handler の中で例外が発生した場合は諦め？
     -- TODO: ハンドラ中に EmacsException が投げられたときは無視しない
     -- といけな？
     --
     -- EmacsValue
-    haskellExceptionHandler :: SomeException -> IO EmacsValue
+    haskellExceptionHandler :: SomeException -> IO ()
     haskellExceptionHandler e =
        nonLocalExitGet env >>= \case
-         Just (_,s,_) ->
-           pure s
+         Just _ ->
+           pure ()
          Nothing -> do
            message <- makeString env (toS $ displayException e)
            listP <- intern env "list"
            arg <- funcall env (untype listP) [untype message]
            sym <- intern env "haskell-error"
            nonLocalExitSignal env sym arg -- これ以降 emacs関数を呼んでは駄目
-           pure $ untype sym
+           pure ()
 
-    emacsExceptionHandler :: EmacsException -> IO EmacsValue
+    emacsExceptionHandler :: EmacsException -> IO ()
     emacsExceptionHandler e@(EmacsException funcallExit a0 a1) = do
       let setter = case funcallExit of
                      EmacsFuncallExitSignal -> _non_local_exit_signal
                      EmacsFuncallExitThrow -> _non_local_exit_throw
       setter env a0 a1
-      pure a0
+      pure ()
 
 -- emacsモジュール関数の呼び出し後に signal/throwされていないかチェッ
 -- クする。されている場合はクリアして EmacsException を投げる。
