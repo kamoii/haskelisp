@@ -3,7 +3,7 @@
 module Emacs.NAdvice where
 
 import Prelude()
-import Protolude
+import Protolude hiding (Symbol)
 import Emacs.Core
 
 -- Emacs 24 からアドバイスの機構が一新された(nadvice.el)。以前より大幅
@@ -55,33 +55,32 @@ whereToKeyword Before = Keyword "before"
 
 -- TODO: FUNCTION は シンボルでないと駄目？ -> いや、関数でもOK
 -- 存在しないシンボルに対しても設定できる。
-adviceAdd'
-  :: (ToEmacsSymbol s, ToEmacsFunction f)
-  => s
+-- アドバイス関数には 第一引数に元関数、残りは引数が渡される。
+-- 引数を (f &rest args) のように受けると、 (apply f args) で元関数を適用可能。
+adviceAdd
+  :: (ToEmacsCallable f)
+  => Text 
   -> Where
   -> f
   -> EmacsM ()
-adviceAdd' target where' func =
-  void $ funcall3 "advice-add" target (whereToKeyword where') func
+adviceAdd target where' func = do
+  cf <- toCallableEmacsValue func
+  void $ call3 "advice-add" (Symbol target) (whereToKeyword where') cf
 
 -- 基本的にこの関数さえあれば何でもできる。
--- TODO: アドバイス外せるように
-around' :: Functionable f => Text -> (EmacsFunction -> f) -> EmacsM ()
+-- TODO: アドバイス外せるように  
+around'
+  :: Text
+  -> (TypedEmacsValue EmacsFunction -> [EmacsValue] -> EmacsM EmacsValue)
+  -> EmacsM ()
 around' name ff = do
-  adviceAdd' (Symbol name) Around ff
+  adviceAdd name Around =<< mkFun (Doc "") (Arity 0,Arity 1000) (\(f:args) -> ff (unsafeType f) args)
 
--- aroundアドバイスの場合、大抵は引数は弄らない。ショートカット的。
--- TODO:
-around :: Functionable f => Text -> (EmacsM EmacsValue -> f) -> EmacsM ()
-around name ff = do
-  adviceAdd' (Symbol name) Around =<< wrap ff
-  where
-    wrap :: Functionable f => (EmacsM EmacsValue -> f) -> EmacsM EmacsFunction
-    wrap newf =
-      let wf :: [EmacsValue] -> EmacsM EmacsValue
-          wf (func:args) = do
-            res <- call (newf (funcall func args)) args
-            case res of
-              Right ev -> return ev
-              Left   _ -> undefined
-      in mkFunction wf 0 1000 "around advice"
+-- 第一引数として元の関数適用を行なうアクション、第二引数として引数を受け取る  
+-- 元の関数は基本的に素直に呼び出すことが殆んどなので。
+around
+  :: Text
+  -> (EmacsM EmacsValue -> [EmacsValue] -> EmacsM EmacsValue)
+  -> EmacsM ()
+around name ff =
+  around' name $ \f args -> ff (apply' f args) args

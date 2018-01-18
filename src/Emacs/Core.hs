@@ -8,7 +8,7 @@ module Emacs.Core
   ( EmacsValue
   , TypedEmacsValue
   , EmacsSymbol, EmacsString, EmacsInteger, EmacsFunction
-  , Doc(..)
+  , Doc(..), Arity(..)
   , unsafeType, untype
   , EmacsM
   , isEq
@@ -22,13 +22,16 @@ module Emacs.Core
   -- readEV, writeEV は公開すべきなのか？？？
   -- mkFunの中だけで利用するべきだけでは？？
   , WriteEmacsValue(..), ReadEmacsValue(..)
+  , ToEmacsCallable(..)
   , apply'
   , call0', call1', call2', call3', call0, call1, call2, call3
+  , mkFun
   , mkFun0, mkFun1, mkFun2
   , mkIOFun0, mkIOFun1
   , Fn0(..), Fn1(..), Fn2(..)
   , IOFn0(..), IOFn1(..), IOFn2(..)
   , Symbol(..)
+  , Keyword(..)
   ) where
 
 import Prelude()
@@ -75,6 +78,10 @@ isNil = liftEM I.isNil
 -- 数値や文字列は素直なんだけど、他
 -- Nil は空 [] でいいのかな？
 newtype Symbol = Symbol Text
+
+-- Emacs の内部的にはキーワードは : (コロン)から始まるシンボル
+-- 値として評価すると自身が返る。
+newtype Keyword = Keyword Text
 
 -- * ReadEmacsValue class
 --
@@ -125,7 +132,7 @@ instance ReadEmacsValue Symbol where
 
 instance ReadEmacsValue () where
   readEV ev =
-    ifM (isNil ev)      
+    ifM (isNil ev)
       (pure ())
       (throwIO $ EmacsValueConversionException "not nil")
 
@@ -157,6 +164,9 @@ instance WriteEmacsValue (TypedEmacsValue et) where
 instance WriteEmacsValue Symbol where
   writeEV (Symbol s) = untype <$> liftEM I.intern s
 
+instance WriteEmacsValue Keyword where
+  writeEV (Keyword s) = writeEV $ Symbol $ ":" <> s
+
 instance WriteEmacsValue Text where
   writeEV t = untype <$> liftEM I.makeString t
 
@@ -181,15 +191,13 @@ instance WriteEmacsValue a => WriteEmacsValue (Maybe a) where
 -- Symbol or a Function
 -- ただ シンボルに functoin が設定されているかどうかまでは確認しない。
 -- Text も特別に便宜のため対応させる -> OverloadedString と相性が悪いので止め
-class EmacsCallable c where
+class WriteEmacsValue c => ToEmacsCallable c where
   toCallableEmacsValue :: c -> EmacsM EmacsValue
+  toCallableEmacsValue = writeEV
 
-instance EmacsCallable Symbol where
-  toCallableEmacsValue = writeEV
-instance EmacsCallable (TypedEmacsValue EmacsSymbol) where
-  toCallableEmacsValue = writeEV
-instance EmacsCallable (TypedEmacsValue EmacsFunction) where
-  toCallableEmacsValue = writeEV
+instance ToEmacsCallable Symbol 
+instance ToEmacsCallable (TypedEmacsValue EmacsSymbol)
+instance ToEmacsCallable (TypedEmacsValue EmacsFunction) 
 
 -- apply/call
 --
@@ -202,7 +210,7 @@ instance EmacsCallable (TypedEmacsValue EmacsFunction) where
 -- 多相的な結果型って何かアンチパターンの匂いがするんだけど、あまり言及見つからないな...
 
 apply'
-  :: (EmacsCallable f)
+  :: (ToEmacsCallable f)
   => f
   -> [EmacsValue]
   -> EmacsM EmacsValue
@@ -211,7 +219,7 @@ apply' f args = do
   readEV =<< join r
 
 call0'
-  :: (EmacsCallable f)
+  :: (ToEmacsCallable f)
   => f
   -> EmacsM EmacsValue
 call0' f = do
@@ -220,7 +228,7 @@ call0' f = do
 call0 fname = call0' (Symbol fname)
 
 call1'
-  :: (EmacsCallable f, WriteEmacsValue a)
+  :: (ToEmacsCallable f, WriteEmacsValue a)
   => f
   -> a
   -> EmacsM EmacsValue
@@ -231,7 +239,7 @@ call1' f ev0 = do
 call1 fname = call1' (Symbol fname)
 
 call2'
-  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b)
+  :: (ToEmacsCallable f, WriteEmacsValue a, WriteEmacsValue b)
   => f
   -> a
   -> b
@@ -243,7 +251,7 @@ call2' f ev0 ev1 = do
 call2 fname = call2' (Symbol fname)
 
 call3'
-  :: (EmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, WriteEmacsValue c)
+  :: (ToEmacsCallable f, WriteEmacsValue a, WriteEmacsValue b, WriteEmacsValue c)
   => f
   -> a
   -> b
@@ -262,6 +270,18 @@ callInteractively fname =
   call1 "call-interactively" (Symbol fname)
 
 -- * 関数作成
+
+mkFun
+  :: Doc
+  -> (Arity,Arity)
+  -> ([EmacsValue] -> EmacsM EmacsValue)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun doc (Arity minArity,Arity maxArity) f = do
+  env <- ask
+  liftIO $ I.makeFunction env f' minArity maxArity doc (castPtrToStablePtr nullPtr)
+  where
+    f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
+    f' env _ args = runEmacsM env $ f args
 
 mkFun1'
   :: (ReadEmacsValue a)
@@ -382,7 +402,7 @@ instance (EmacsMonad m, ReadEmacsValue a, WriteEmacsValue r)
 -- * その他
 
 -- nil 型は存在しない
--- また nil 値はプロパティを持っていないため、opaque な値を用意する必要はない。  
+-- また nil 値はプロパティを持っていないため、opaque な値を用意する必要はない。
 -- 単一の値しかないので引数は不要。どうやって取得するだろ？
 -- nil という定数が nil を持っている。
 -- (symbol-value 'nil) でいけるかな。(eval 'nil) でもいいかも

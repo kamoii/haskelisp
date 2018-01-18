@@ -22,10 +22,10 @@ library
                      , Emacs.Internal.FFI
                      , Emacs.Core
                      , Emacs.Symbol
+                     , Emacs.NAdvice
                      --  Emacs
                      -- , Emacs.Function
                      -- , Emacs.Command
-                     -- , Emacs.NAdvice
                      -- , Emacs.Module
                      -- , Emacs.Keymap
   build-depends:       base >= 4.8 && < 5
