@@ -31,6 +31,7 @@ module Emacs.Core
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
   , emacsModule
+  , setValue, setFunction, setCommand, InteractiveForm(..)
   ) where
 
 import Prelude()
@@ -345,20 +346,57 @@ emacsModule modnameMaybe act =
     case modnameMaybe of
       Nothing -> pure ()
       Just modname -> void $ call1 "provide" =<< intern modname
-  
--- -- `read-from-string` が失敗した場合は例外投げるので cons かどうかの確
--- -- 認は不要。
--- evalString :: Text -> EmacsM EmacsValue
--- evalString t =
---   funcall1 "eval" =<< (car . typeUnsafe =<< funcall1 "read-from-string" t)
+
+-- * set系
+
+setValue :: IsEmacsValue a => Text -> a -> EmacsM EmacsValue
+setValue name v = do
+  nameQ <- intern name
+  call2 "set" nameQ v
+
+--  関数の設定
+-- 一番 low level なのが setFunction
+setFunction :: Text -> TypedEmacsValue EmacsFunction -> EmacsM ()
+setFunction name f = do
+  nameQ <- intern name
+  void $ call2 "fset" nameQ f
+
+-- 依存型とか駆使すれば多分 interacvie form と関数の引数の型の整合性が
+-- 取れていることが多分保証できる。
+
+-- これは直接は使って欲くないため、' postfix を付けている。
+-- EmacsValue を引数として取っているので function 以外のものを渡せてしまう
 --
--- -- emacsModuleInit に渡す関数
--- -- TODO: move to Module.hs
--- defmodule :: Text -> EmacsM a -> EmacsModule
--- defmodule name mod ert = do
---   env <- getEmacsEnvFromRT ert
---   errorHandle env $ do
---     ctx <- initCtx env
---     runEmacsM ctx $ mod >> funcall1 "provide" (Symbol name)
---   return 0
+-- interactive-form はシンボル側及び関数側でも独立に情報を持つようだ。
+-- 例えば (lambda (str) (interactive "s") (message str)) とか。
+-- これはシンボル側の 属性設定からは影響を受けない。
+-- 関数の interactive-form は作成後は変更できない模様(少なくとも関数はない)
 --
+--  * symbol から起動する場合はどっちかに interactive-form が設定されていれば OK
+--    - 両方設定されている場合は symbol 側の interactive-form 属性が優先される模様
+--    - 上記の挙動については `interactive-form` C関数のコード見れば、コメントで記載されている
+--  * 直接関数オブジェクトから起動する場合は その関数側に interactive-form が設定されている必要がある。
+--
+-- (defun hoge (str) (interactive "s") ...) のように定義した場合は関
+-- 数側に interactive-form が設定されるので、シンボル側の
+-- interactive-form 属性は nil のまま。
+--
+-- > (get 'hoge 'interactive-form) ;=> nil
+-- > (interactive-form 'hoge)      ;=> "s"
+-- > (put  'hoge 'interactive-form '(interactive "s\ns\n"))  ;シンボル側に設定
+-- > (interactive-form 'hoge)      ;=> "s\ns\n"   シンボル側優先
+
+data InteractiveForm
+  = InteractiveNoArgs  
+
+setCommand
+  :: Text
+  -> InteractiveForm
+  -> (TypedEmacsValue EmacsFunction)
+  -> EmacsM ()
+setCommand fname form f = do
+  fnameQ <- intern fname
+  interactiveFormQ <- intern "interactive-form"
+  void $ call2 "fset" fnameQ f
+  void $ call3 "put"  fnameQ interactiveFormQ =<< eval "'(interactive nil)"
+

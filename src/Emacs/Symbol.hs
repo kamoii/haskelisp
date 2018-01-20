@@ -32,18 +32,6 @@ getSymbolName name = do
   name <- call1 "symbol-name" =<< intern name
   readString $ unsafeType name
 
-setValue :: IsEmacsValue a => Text -> a -> EmacsM EmacsValue
-setValue name v = do
-  nameQ <- intern name
-  call2 "set" nameQ v
-
---  関数の設定
--- 一番 low level なのが setFunction
-setFunction :: Text -> TypedEmacsValue EmacsFunction -> EmacsM ()
-setFunction name f = do
-  nameQ <- intern name
-  void $ call2 "fset" nameQ f
-
 -- Could throw exception if the symbol is not setted.
 getValue :: Text -> EmacsM EmacsValue
 getValue name =

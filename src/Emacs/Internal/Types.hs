@@ -105,7 +105,5 @@ type EFunctionStub a
   -> StablePtr a
   -> IO EmacsValue
 
-data InteractiveForm = InteractiveNoArgs
-
 newtype Doc   = Doc Text   -- ドキュメント(関数など)
 newtype Arity = Arity Int  -- 関数アリティ
