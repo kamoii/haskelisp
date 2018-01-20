@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emacs.Command
- ( setCommand
- , defcommand'
- , defcommand
+ ( InteractiveForm(..)
+ , setCommand
  ) where
 
+import Prelude()
+import Protolude hiding (Symbol)
 import Emacs.Core
 import Data.Text
 import Control.Monad (void)
@@ -34,29 +35,16 @@ import Control.Monad (void)
 -- > (put  'hoge 'interactive-form '(interactive "s\ns\n"))  ;シンボル側に設定
 -- > (interactive-form 'hoge)      ;=> "s\ns\n"   シンボル側優先
 
-setCommand :: Text -> InteractiveForm -> EmacsFunction -> EmacsM ()
+data InteractiveForm
+
+setCommand
+  :: Text
+  -> InteractiveForm
+  -> (TypedEmacsValue EmacsFunction)
+  -> EmacsM ()
 setCommand fname form f = do
   fnameQ <- intern fname
   interactiveFormQ <- intern "interactive-form"
-  void $ funcall2 "fset" fnameQ f
-  void $ funcall3 "put"  fnameQ interactiveFormQ =<< evalString "'(interactive nil)"
-
--- TODO: interacitve-form の携帯によってarity は決まる？かな
-defcommand'
-  :: Text
-  -> Doc
-  -> InteractiveForm
-  -> Arity
-  -> ([EmacsValue] -> EmacsM EmacsValue)
-  -> EmacsM ()
-defcommand' fname (Doc doc) form (Arity arity) f =
-  setCommand fname form =<< mkFunction f arity arity doc
-
-defcommand 
-  :: Functionable f
-  => Text
-  -> f
-  -> EmacsM ()
-defcommand name f = 
-  setCommand name undefined =<< mkFunctionFromFunctionable f
+  void $ call2 "fset" fnameQ f
+  void $ call3 "put"  fnameQ interactiveFormQ =<< eval "'(interactive nil)"
 

@@ -24,6 +24,7 @@ module Emacs.Core
   , Cons(..), cons, mkCons, readCons, typeCons
   , mkList, unsafeReadList
   , call', call, call1, call2, call3
+  , eval
   , mkFun
   , convFun1, convFun2
   , convIOFun1
@@ -293,6 +294,12 @@ typeCons :: EmacsValue -> EmacsM (Maybe (TypedEmacsValue EmacsCons))
 typeCons = typeByPredicate "consp"   
   
 -- * その他
+
+-- 抜け穴
+eval :: Text -> EmacsM EmacsValue
+eval str = do
+  q <- call1 "car" =<< call1 "read-from-string" =<< mkString str
+  call1 "eval" q
 
 -- nil 型は存在しない
 -- また nil 値はプロパティを持っていないため、opaque な値を用意する必要はない。
