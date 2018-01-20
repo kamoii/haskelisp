@@ -10,14 +10,14 @@ import Data.IORef
 --
 -- obarray に設定されている全てのシンボルを取得する。
 -- Use `mapatoms` functoin.
-allSymbols :: EmacsM [EmacsValue]
-allSymbols = do
-  ref <- liftIO $ newIORef []
-  call1 "mapatoms" (IOFn1 (accum ref))
-  liftIO $ readIORef ref
-  where
-    accum :: IORef [EmacsValue] -> EmacsValue -> IO ()
-    accum ref sym = modifyIORef ref (sym:)
+-- allSymbols :: EmacsM [EmacsValue]
+-- allSymbols = do
+--   ref <- liftIO $ newIORef []
+--   call1 "mapatoms" (IOFn1 (accum ref))
+--   liftIO $ readIORef ref
+--   where
+--     accum :: IORef [EmacsValue] -> EmacsValue -> IO ()
+--     accum ref sym = modifyIORef ref (sym:)
 
 -- Symbol has four slots.
 --
@@ -27,33 +27,44 @@ allSymbols = do
 --  4. property list (* can have buffer local list)
 
 getSymbolName :: Text -> EmacsM Text
-getSymbolName name = readEV =<< call1 "symbol-name" (Symbol name)
+getSymbolName name = do
+  name <- call1 "symbol-name" =<< intern name
+  readString $ unsafeType name
 
-setValue :: WriteEmacsValue a => Text -> a -> EmacsM EmacsValue
-setValue name val = call2 "set" (Symbol name) val
+setValue :: IsEmacsValue a => Text -> a -> EmacsM EmacsValue
+setValue name v = do
+  nameQ <- intern name
+  call2 "set" nameQ v
 
 --  関数の設定
 -- 一番 low level なのが setFunction
 setFunction :: Text -> TypedEmacsValue EmacsFunction -> EmacsM ()
-setFunction name f = void $ call2 "fset" (Symbol name) f
+setFunction name f = do
+  nameQ <- intern name
+  void $ call2 "fset" nameQ f
 
 -- Could throw exception if the symbol is not setted.
 getValue :: Text -> EmacsM EmacsValue
-getValue name = call1 "symbol-value" (Symbol name)
+getValue name =
+  call1 "symbol-value" =<< intern name
 
 -- if Symbol exists (included in obarray) and a value is bounded.
 isBounded :: Text -> EmacsM Bool
-isBounded name = readEV =<< call1 "boundp" (Symbol name)
+isBounded name =
+  readBool =<< call1 "boundp" =<< intern name
 
 -- Buffer local
 --
 -- If the variable is buffer local, you need to use
 -- getDefaultValue/setDefaultValue to set/get the global variable.
 getDefaultValue :: Text -> EmacsM EmacsValue
-getDefaultValue name = call1 "default-value" (Symbol name)
+getDefaultValue name =
+  call1 "default-value" =<< intern name
 
-setDefaultValue :: WriteEmacsValue a => Text -> a -> EmacsM EmacsValue
-setDefaultValue name val = call2 "set-default" (Symbol name) val
+setDefaultValue :: IsEmacsValue a => Text -> a -> EmacsM EmacsValue
+setDefaultValue name val = do
+  nameQ <- intern name
+  call2 "set-default" nameQ val
 
 --  Keyword Symbol
 
@@ -63,15 +74,19 @@ setDefaultValue name val = call2 "set-default" (Symbol name) val
 -- ただし値として nil は設定できない。未設定とnil に設定は区別されない。
 getProperty :: Text -> Text -> EmacsM (Maybe EmacsValue)
 getProperty name property = do
-  ev <- call2 "get" (Symbol name) (Symbol property)
+  nameQ <- intern name
+  propertyQ <- intern property
+  ev <- call2 "get" nameQ propertyQ
   b <- not <$> isNil ev
   return $ if b then Just ev else Nothing
 
 setProperty
-  :: (WriteEmacsValue v)
+  :: (IsEmacsValue v)
   => Text
   -> Text
   -> v
   -> EmacsM EmacsValue
-setProperty name property value =
-  call3 "put" (Symbol name) (Symbol property) value
+setProperty name property value = do
+  nameQ <- intern name
+  propertyQ <- intern property
+  call3 "put" nameQ propertyQ value
