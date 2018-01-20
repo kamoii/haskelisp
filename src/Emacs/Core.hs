@@ -29,11 +29,12 @@ module Emacs.Core
   , convIOFun1
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
+  , emacsModule
   ) where
 
 import Prelude()
 import Protolude hiding (Symbol)
-import Emacs.Internal hiding (isNil, intern)
+import Emacs.Internal hiding (isNil, intern, emacsModule)
 import qualified Emacs.Internal as I
 import Foreign.Ptr (nullPtr)
 import Foreign.StablePtr (castPtrToStablePtr)
@@ -328,6 +329,16 @@ unsafeReadList conv ev = do
       t <- call1 "cdr" ev
       (h:) <$> unsafeReadList conv t
 
+-- * Module
+
+emacsModule :: Maybe Text -> EmacsM () -> EmacsModule
+emacsModule modnameMaybe act = 
+  I.emacsModule $ \env -> runEmacsM env $ do
+    act
+    case modnameMaybe of
+      Nothing -> pure ()
+      Just modname -> void $ call1 "provide" =<< intern modname
+  
 -- -- `read-from-string` が失敗した場合は例外投げるので cons かどうかの確
 -- -- 認は不要。
 -- evalString :: Text -> EmacsM EmacsValue
