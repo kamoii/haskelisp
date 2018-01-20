@@ -10,14 +10,15 @@ import Data.IORef
 --
 -- obarray に設定されている全てのシンボルを取得する。
 -- Use `mapatoms` functoin.
--- allSymbols :: EmacsM [EmacsValue]
--- allSymbols = do
---   ref <- liftIO $ newIORef []
---   call1 "mapatoms" (IOFn1 (accum ref))
---   liftIO $ readIORef ref
---   where
---     accum :: IORef [EmacsValue] -> EmacsValue -> IO ()
---     accum ref sym = modifyIORef ref (sym:)
+allSymbols :: EmacsM [EmacsValue]
+allSymbols = do
+  ref <- liftIO $ newIORef []
+  fun <- mkIOFun1 pure (const mkNil) $ accum ref
+  call1 "mapatoms" fun
+  liftIO $ readIORef ref
+  where
+    accum :: IORef [EmacsValue] -> EmacsValue -> IO ()
+    accum ref sym = modifyIORef ref (sym:)
 
 -- Symbol has four slots.
 --

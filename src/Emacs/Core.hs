@@ -12,6 +12,7 @@ module Emacs.Core
   , unsafeType, untype
   , EmacsM
   , IsEmacsValue
+  , CallableEmacsValue(..)
   , isEq
   , isNil
   , mkNil
@@ -24,6 +25,8 @@ module Emacs.Core
   , mkList, unsafeReadList
   , call', call, call1, call2, call3
   , mkFun
+  , mkFun1, mkFun2
+  , mkIOFun1, mkIOFun2
   ) where
 
 import Prelude()
@@ -156,23 +159,24 @@ readBool ev = not <$> isNil ev
 --
 -- 多相的な結果型って何かアンチパターンの匂いがするんだけど、あまり言及見つからないな...
 
-data EmacsCallable
-  = ECSymbol (TypedEmacsValue EmacsSymbol)
-  | ECFunction (TypedEmacsValue EmacsFunction)
-  | ECUnsafe EmacsValue
+data CallableEmacsValue
+  = CEVSymbol (TypedEmacsValue EmacsSymbol)
+  | CEVFunction (TypedEmacsValue EmacsFunction)
+  | CEVUnsafe EmacsValue
 
-call' :: EmacsCallable -> [EmacsValue] -> EmacsM EmacsValue
+instance IsEmacsValue CallableEmacsValue where
+  toEv (CEVSymbol v) = untype v
+  toEv (CEVFunction v) = untype v
+  toEv (CEVUnsafe v) = v
+
+call' :: CallableEmacsValue -> [EmacsValue] -> EmacsM EmacsValue
 call' f args =
-  join $ liftEM2 funcall (func f) <$> (pure args)
-  where
-    func (ECSymbol v) = untype v
-    func (ECFunction v) = untype v
-    func (ECUnsafe v) =v
+  join $ liftEM2 funcall (toEv f) <$> (pure args)
 
 call :: Text -> [EmacsValue] -> EmacsM EmacsValue
 call funcname args = do
   f <- intern funcname
-  call' (ECSymbol f) args
+  call' (CEVSymbol f) args
 
 class IsEmacsValue ev where toEv :: ev -> EmacsValue
 instance IsEmacsValue EmacsValue where toEv = identity
@@ -201,6 +205,46 @@ mkFun doc (Arity minArity,Arity maxArity) f = do
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ args = runEmacsM env $ f args
 
+mkFun1
+  :: (EmacsValue -> EmacsM a)
+  -> (r -> EmacsM EmacsValue)
+  -> (a -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun1 a0f rf f = mkFun (Doc "") (Arity 1, Arity 1) f'
+  where
+    f' [a0] = rf =<< f <$> a0f a0
+
+mkFun2
+  :: (EmacsValue -> EmacsM a0)
+  -> (EmacsValue -> EmacsM a1)
+  -> (r -> EmacsM EmacsValue)
+  -> (a0 -> a1 -> r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkFun2 a0f a1f rf f = mkFun (Doc "") (Arity 2, Arity 2) f'
+  where
+    f' [a0, a1] = rf =<< f <$> a0f a0 <*> a1f a1
+
+class LiftToEmacsM m where liftToEmacsM :: m a -> EmacsM a
+instance LiftToEmacsM IO where liftToEmacsM = liftIO
+instance LiftToEmacsM EmacsM where liftToEmacsM = identity
+
+mkIOFun1                                   
+  :: LiftToEmacsM m
+  => (EmacsValue -> EmacsM a)
+  -> (r -> EmacsM EmacsValue)
+  -> (a -> m r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkIOFun1 a0f rf f = mkFun1 a0f (\a -> liftToEmacsM a >>= rf) f
+
+mkIOFun2                                   
+  :: LiftToEmacsM m
+  => (EmacsValue -> EmacsM a0)
+  -> (EmacsValue -> EmacsM a1)
+  -> (r -> EmacsM EmacsValue)
+  -> (a0 -> a1 -> m r)
+  -> EmacsM (TypedEmacsValue EmacsFunction)
+mkIOFun2 a0f a1f rf f = mkFun2 a0f a1f (\a -> liftToEmacsM a >>= rf) f
+                    
 -- * Cons
 
 data EmacsCons

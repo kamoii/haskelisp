@@ -58,14 +58,14 @@ whereToKeyword Before = Keyword "before"
 -- アドバイス関数には 第一引数に元関数、残りは引数が渡される。
 -- 引数を (f &rest args) のように受けると、 (apply f args) で元関数を適用可能。
 adviceAdd
-  :: (ToEmacsCallable f)
-  => Text 
+  :: Text 
   -> Where
-  -> f
+  -> CallableEmacsValue
   -> EmacsM ()
-adviceAdd target where' func = do
-  cf <- toCallableEmacsValue func
-  void $ call3 "advice-add" (Symbol target) (whereToKeyword where') cf
+adviceAdd target where' cev = do
+  targetEv <- intern target
+  whereEv <- mkKeyword $ whereToKeyword where'
+  void $ call3 "advice-add" targetEv whereEv cev
 
 -- 基本的にこの関数さえあれば何でもできる。
 -- TODO: アドバイス外せるように  
@@ -74,7 +74,8 @@ around'
   -> (TypedEmacsValue EmacsFunction -> [EmacsValue] -> EmacsM EmacsValue)
   -> EmacsM ()
 around' name ff = do
-  adviceAdd name Around =<< mkFun (Doc "") (Arity 0,Arity 1000) (\(f:args) -> ff (unsafeType f) args)
+  fun <- mkFun (Doc "") (Arity 0,Arity 1000) (\(f:args) -> ff (unsafeType f) args)
+  adviceAdd name Around (CEVFunction fun)
 
 -- 第一引数として元の関数適用を行なうアクション、第二引数として引数を受け取る  
 -- 元の関数は基本的に素直に呼び出すことが殆んどなので。
@@ -83,4 +84,4 @@ around
   -> (EmacsM EmacsValue -> [EmacsValue] -> EmacsM EmacsValue)
   -> EmacsM ()
 around name ff =
-  around' name $ \f args -> ff (apply' f args) args
+  around' name $ \f args -> ff (call' (CEVFunction f) args) args
