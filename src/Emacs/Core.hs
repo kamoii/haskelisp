@@ -8,11 +8,11 @@ module Emacs.Core
   ( EmacsValue
   , TypedEmacsValue
   , EmacsSymbol, EmacsString, EmacsInteger, EmacsFunction, EmacsCons
+  , CallableEmacsValue(..)
+  , IsEmacsValue
   , Doc(..), Arity(..)
   , unsafeType, untype
   , EmacsM
-  , IsEmacsValue
-  , CallableEmacsValue(..)
   , isEq
   , isNil
   , mkNil
@@ -25,6 +25,8 @@ module Emacs.Core
   , mkList, unsafeReadList
   , call', call, call1, call2, call3
   , mkFun
+  , convFun1, convFun2
+  , convIOFun1
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
   ) where
@@ -205,14 +207,38 @@ mkFun doc (Arity minArity,Arity maxArity) f = do
     f' :: EmacsEnv -> StablePtr a -> [EmacsValue] -> IO EmacsValue
     f' env _ args = runEmacsM env $ f args
 
+
+-- 関数
+
+convFun1
+  :: (EmacsValue -> EmacsM a0)
+  -> (r -> EmacsM EmacsValue)
+  -> (a0 -> r)
+  -> ([EmacsValue] -> EmacsM EmacsValue)
+convFun1 a0f rf f [a0] = rf =<< f <$> a0f a0
+
+convFun2
+  :: (EmacsValue -> EmacsM a0)
+  -> (EmacsValue -> EmacsM a1)
+  -> (r -> EmacsM EmacsValue)
+  -> (a0 -> a1 -> r)
+  -> ([EmacsValue] -> EmacsM EmacsValue)
+convFun2 a0f a1f rf f [a0, a1] = rf =<< f <$> a0f a0 <*> a1f a1
+
+convIOFun1                                   
+  :: LiftToEmacsM m
+  => (EmacsValue -> EmacsM a)
+  -> (r -> EmacsM EmacsValue)
+  -> (a -> m r)
+  -> ([EmacsValue] -> EmacsM EmacsValue)
+convIOFun1 a0f rf f = convFun1 a0f (\a -> liftToEmacsM a >>= rf) f
+  
 mkFun1
   :: (EmacsValue -> EmacsM a)
   -> (r -> EmacsM EmacsValue)
   -> (a -> r)
   -> EmacsM (TypedEmacsValue EmacsFunction)
-mkFun1 a0f rf f = mkFun (Doc "") (Arity 1, Arity 1) f'
-  where
-    f' [a0] = rf =<< f <$> a0f a0
+mkFun1 a0f rf f = mkFun (Doc "") (Arity 1, Arity 1) $ convFun1 a0f rf f
 
 mkFun2
   :: (EmacsValue -> EmacsM a0)
@@ -220,9 +246,7 @@ mkFun2
   -> (r -> EmacsM EmacsValue)
   -> (a0 -> a1 -> r)
   -> EmacsM (TypedEmacsValue EmacsFunction)
-mkFun2 a0f a1f rf f = mkFun (Doc "") (Arity 2, Arity 2) f'
-  where
-    f' [a0, a1] = rf =<< f <$> a0f a0 <*> a1f a1
+mkFun2 a0f a1f rf f = mkFun (Doc "") (Arity 2, Arity 2) $ convFun2 a0f a1f rf f
 
 class LiftToEmacsM m where liftToEmacsM :: m a -> EmacsM a
 instance LiftToEmacsM IO where liftToEmacsM = liftIO
