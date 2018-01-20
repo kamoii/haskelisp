@@ -20,12 +20,11 @@ library
   exposed-modules:     Emacs.Internal
                      , Emacs.Internal.Types
                      , Emacs.Internal.FFI
+                     , Emacs
                      , Emacs.Core
                      , Emacs.Symbol
+                     , Emacs.Command
                      , Emacs.NAdvice
-                     --  Emacs
-                     -- , Emacs.Function
-                     -- , Emacs.Command
                      -- , Emacs.Module
                      -- , Emacs.Keymap
   build-depends:       base >= 4.8 && < 5
