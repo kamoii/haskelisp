@@ -31,6 +31,9 @@ module Emacs.Core
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
   , emacsModule
+  -- EmacsRuntime, CInt を export しないと foreign export ... EmacsModule で
+  -- コンパイルエラーが発生する
+  , EmacsModule, EmacsRuntime(..), CInt(..)
   , setValue, setFunction, setCommand, InteractiveForm(..)
   ) where
 
@@ -40,6 +43,7 @@ import Emacs.Internal hiding (isNil, intern, emacsModule)
 import qualified Emacs.Internal as I
 import Foreign.Ptr (nullPtr)
 import Foreign.StablePtr (castPtrToStablePtr)
+import Foreign.C.Types (CInt(..))
 import qualified Data.Text as T
 
 -- * EmacsM モナド
@@ -146,7 +150,7 @@ unsafeReadKeyword ev = do
 -- true となる。ただし慣習的に t シンボル(値として自身を持つ)が true
 -- として用いられる。
 
-mkBool :: Bool -> EmacsM EmacsValue  
+mkBool :: Bool -> EmacsM EmacsValue
 mkBool b = if b then mkT else mkNil
 
 readBool :: EmacsValue -> EmacsM Bool
@@ -228,14 +232,14 @@ convFun2
   -> ([EmacsValue] -> EmacsM EmacsValue)
 convFun2 a0f a1f rf f [a0, a1] = rf =<< f <$> a0f a0 <*> a1f a1
 
-convIOFun1                                   
+convIOFun1
   :: LiftToEmacsM m
   => (EmacsValue -> EmacsM a)
   -> (r -> EmacsM EmacsValue)
   -> (a -> m r)
   -> ([EmacsValue] -> EmacsM EmacsValue)
 convIOFun1 a0f rf f = convFun1 a0f (\a -> liftToEmacsM a >>= rf) f
-  
+
 mkFun1
   :: (EmacsValue -> EmacsM a)
   -> (r -> EmacsM EmacsValue)
@@ -255,7 +259,7 @@ class LiftToEmacsM m where liftToEmacsM :: m a -> EmacsM a
 instance LiftToEmacsM IO where liftToEmacsM = liftIO
 instance LiftToEmacsM EmacsM where liftToEmacsM = identity
 
-mkIOFun1                                   
+mkIOFun1
   :: LiftToEmacsM m
   => (EmacsValue -> EmacsM a)
   -> (r -> EmacsM EmacsValue)
@@ -263,7 +267,7 @@ mkIOFun1
   -> EmacsM (TypedEmacsValue EmacsFunction)
 mkIOFun1 a0f rf f = mkFun1 a0f (\a -> liftToEmacsM a >>= rf) f
 
-mkIOFun2                                   
+mkIOFun2
   :: LiftToEmacsM m
   => (EmacsValue -> EmacsM a0)
   -> (EmacsValue -> EmacsM a1)
@@ -271,7 +275,7 @@ mkIOFun2
   -> (a0 -> a1 -> m r)
   -> EmacsM (TypedEmacsValue EmacsFunction)
 mkIOFun2 a0f a1f rf f = mkFun2 a0f a1f (\a -> liftToEmacsM a >>= rf) f
-                    
+
 -- * Cons
 
 data EmacsCons
@@ -292,8 +296,8 @@ readCons (TypedEmacsValue ev) =
   liftA2 Cons (call1 "car" ev) (call1 "cdr" ev)
 
 typeCons :: EmacsValue -> EmacsM (Maybe (TypedEmacsValue EmacsCons))
-typeCons = typeByPredicate "consp"   
-  
+typeCons = typeByPredicate "consp"
+
 -- * その他
 
 -- 抜け穴
@@ -340,7 +344,7 @@ unsafeReadList conv ev = do
 -- * Module
 
 emacsModule :: Maybe Text -> EmacsM () -> EmacsModule
-emacsModule modnameMaybe act = 
+emacsModule modnameMaybe act =
   I.emacsModule $ \env -> runEmacsM env $ do
     act
     case modnameMaybe of
@@ -387,7 +391,7 @@ setFunction name f = do
 -- > (interactive-form 'hoge)      ;=> "s\ns\n"   シンボル側優先
 
 data InteractiveForm
-  = InteractiveNoArgs  
+  = InteractiveNoArgs
 
 setCommand
   :: Text
@@ -399,4 +403,3 @@ setCommand fname form f = do
   interactiveFormQ <- intern "interactive-form"
   void $ call2 "fset" fnameQ f
   void $ call3 "put"  fnameQ interactiveFormQ =<< eval "'(interactive nil)"
-

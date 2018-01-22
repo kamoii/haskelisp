@@ -8,6 +8,7 @@ import Prelude()
 import Protolude
 import Emacs.Core
 
-evalAfterLoad :: Text -> EmacsM a -> EmacsM ()
-evalAfterLoad name prog = 
-  void $ funcall2 "eval-after-load" (Symbol name) (Function (void prog))
+evalAfterLoad :: Text -> EmacsM () -> EmacsM ()
+evalAfterLoad name prog = do
+  nameEv <- intern name
+  void $ call2 "eval-after-load" nameEv (Function (void prog))

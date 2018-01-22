@@ -1,3 +1,5 @@
 a.out
 app/Main
 /.stack-work
+test/CoreTest
+test/InternalTest
