@@ -328,18 +328,15 @@ mkT = call1 "symbol-value" =<< intern "t"
 mkList :: [EmacsValue] -> EmacsM EmacsValue
 mkList evs = call "list" evs
 
-unsafeReadList
-  :: (EmacsValue -> EmacsM a)
-  -> EmacsValue
-  -> EmacsM [a]
-unsafeReadList conv ev = do
+unsafeReadList :: EmacsValue -> EmacsM [EmacsValue]
+unsafeReadList ev = do
   b <- isNil ev
   if b
     then pure []
     else do
-      h <- conv =<< call1 "car" ev
+      h <- call1 "car" ev
       t <- call1 "cdr" ev
-      (h:) <$> unsafeReadList conv t
+      (h:) <$> unsafeReadList t
 
 -- * Module
 
