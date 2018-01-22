@@ -21,6 +21,7 @@ library
                      , Emacs.Internal.Types
                      , Emacs.Internal.FFI
                      , Emacs.Core
+                     , Emacs.Class
                      , Emacs.Symbol
                      , Emacs.NAdvice
                      -- , Emacs.Module
