@@ -25,18 +25,18 @@ import Foreign.StablePtr
 --
 -- haskell では不便なので ENil という型を導入する。
 data EmacsType
-  = ESymbol
-  | EInteger
-  | EKeyword
-  | EFunction
-  | EString
-  | ECons
-  | EList
-  | ENil
-  | EBool
-  | EKeymap
-  | EKeyseq
-  | EUnkown
+  = ETSymbol
+  | ETInteger
+  | ETKeyword
+  | ETFunction
+  | ETString
+  | ETCons
+  | ETList
+  | ETNil
+  | ETBool
+  | ETKeymap
+  | ETKeyseq
+  | ETUnkown
   deriving (Show, Eq)
 
 type EmacsModule = EmacsRuntime -> IO CInt

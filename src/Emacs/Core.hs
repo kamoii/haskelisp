@@ -23,13 +23,15 @@ module Emacs.Core
   , Keyword(..), mkKeyword, unsafeReadKeyword
   , Cons(..), cons, mkCons, readCons, typeCons
   , mkList, unsafeReadList
+  , mkAList
   , call', call, call1, call2, call3
-  , eval
   , mkFun
   , convFun1, convFun2
   , convIOFun1
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
+  , ELisp(..), mkELisp
+  , eval, evalLexical, evalString  
   , emacsModule
   -- EmacsRuntime, CInt を export しないと foreign export ... EmacsModule で
   -- コンパイルエラーが発生する
@@ -171,12 +173,10 @@ readBool ev = not <$> isNil ev
 data CallableEmacsValue
   = CEVSymbol (TypedEmacsValue EmacsSymbol)
   | CEVFunction (TypedEmacsValue EmacsFunction)
-  | CEVUnsafe EmacsValue
 
 instance IsEmacsValue CallableEmacsValue where
   toEv (CEVSymbol v) = untype v
   toEv (CEVFunction v) = untype v
-  toEv (CEVUnsafe v) = v
 
 call' :: CallableEmacsValue -> [EmacsValue] -> EmacsM EmacsValue
 call' f args =
@@ -298,11 +298,47 @@ readCons (TypedEmacsValue ev) =
 typeCons :: EmacsValue -> EmacsM (Maybe (TypedEmacsValue EmacsCons))
 typeCons = typeByPredicate "consp"
 
--- * その他
+-- * ELisp, eval/evalString 
+-- 
+-- 呼び出しが複数必要な場合、call/mk*系よりは簡単に使える。
+-- またマクロ系は funcall では呼べないので eval経由で呼ぶ必要がある。  
+-- 型安全のへったくりもないので注意して使う必要あり。  
+-- 
 
--- 抜け穴
-eval :: Text -> EmacsM EmacsValue
-eval str = do
+data ELisp
+  = ESymbol Text
+  | EString Text
+  | EKeyword Text
+  | EInt Int
+  | ECons ELisp ELisp
+  | EList [ELisp]
+  | EAlist [(ELisp,ELisp)]
+  | ENil 
+  | EEmacsValue EmacsValue
+
+mkELisp :: ELisp -> EmacsM EmacsValue  
+mkELisp (ESymbol sym) = untype <$> mkSymbol (Symbol sym)
+mkELisp (EString str) = untype <$> mkString str
+mkELisp (EKeyword kw) = mkKeyword (Keyword kw)  
+mkELisp (EInt i) = untype <$> mkInteger i  
+mkELisp (ECons car cdr) = untype <$> join (cons <$> mkELisp car <*> mkELisp cdr)
+mkELisp (EList ls) = mkList =<< traverse mkELisp ls  
+mkELisp (EAlist as) = mkAList =<< traverse (\(car,cdr) -> (,) <$> mkELisp car <*> mkELisp cdr) as
+mkELisp ENil = mkNil  
+mkELisp (EEmacsValue ev) = pure ev
+
+eval :: ELisp -> EmacsM EmacsValue 
+eval sexp = 
+  call1 "eval" =<< mkELisp sexp
+
+evalLexical :: [(ELisp, ELisp)] -> ELisp -> EmacsM EmacsValue  
+evalLexical binds sexp = do
+  bindsEv <- mkELisp $ EAlist binds
+  sexpEv <- mkELisp sexp
+  call2 "eval" sexpEv bindsEv
+
+evalString :: Text -> EmacsM EmacsValue
+evalString str = do
   q <- call1 "car" =<< call1 "read-from-string" =<< mkString str
   call1 "eval" q
 
@@ -327,6 +363,11 @@ mkT = call1 "symbol-value" =<< intern "t"
 -- listp という関数があるが、これは cons もしくは nil かどうかを判定している。
 mkList :: [EmacsValue] -> EmacsM EmacsValue
 mkList evs = call "list" evs
+
+mkAList :: [(EmacsValue,EmacsValue)] -> EmacsM EmacsValue  
+mkAList alist = do
+  evs <- traverse mkCons $ map (\(a,b) -> Cons a b) alist
+  mkList (untype <$> evs)
 
 unsafeReadList :: EmacsValue -> EmacsM [EmacsValue]
 unsafeReadList ev = do
@@ -390,13 +431,33 @@ setFunction name f = do
 data InteractiveForm
   = InteractiveNoArgs
 
+-- 2018/01/24
+-- この方式はうまくいかない？
+-- setCommand
+--   :: Text
+--   -> InteractiveForm
+--   -> (TypedEmacsValue EmacsFunction)
+--   -> EmacsM ()
+-- setCommand fname form f = do
+--   fnameQ <- intern fname
+--   interactiveFormQ <- intern "interactive-form"
+--   void $ call2 "fset" fnameQ f
+--   void $ call3 "put"  fnameQ interactiveFormQ =<< evalString "'(interactive)"
+
+-- eval の lexical binding を利用
+--   (lambda (&rest args)
+--     (interactive)
+--     (apply f args))
 setCommand
   :: Text
   -> InteractiveForm
   -> (TypedEmacsValue EmacsFunction)
   -> EmacsM ()
 setCommand fname form f = do
-  fnameQ <- intern fname
-  interactiveFormQ <- intern "interactive-form"
-  void $ call2 "fset" fnameQ f
-  void $ call3 "put"  fnameQ interactiveFormQ =<< eval "'(interactive nil)"
+  let binds = [(ESymbol "f", EEmacsValue (untype f))]
+  let sexp = EList [ ESymbol "lambda"
+                   , EList [ESymbol "&rest", ESymbol "args"]
+                   , EList [ESymbol "interactive"]
+                   , EList [ESymbol "apply", ESymbol "f", ESymbol "args"]
+                   ]
+  setFunction fname =<< unsafeType <$> evalLexical binds sexp

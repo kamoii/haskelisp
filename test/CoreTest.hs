@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ForeignFunctionInterface,OverloadedStrings, TypeApplications, DataKinds #-}
 module Main where
 
@@ -16,11 +17,10 @@ emacsModuleInit = emacsModule (Just "core-test") $ do
     (\str -> do
         mkString $ str <> " yeah!"
     )
-  pure ()
   
   defvar "yeah" ("簡単に定義だ!" :: Text)
-  defun @PureFun @1 "append-foo" $ \str -> str <> ("-foo" :: Text)
-  defcmd @IOFun @0 "hello" InteractiveNoArgs $ do
+  defun "append-foo" $ \str -> str <> ("-foo" :: Text)
+  defcmd "hello" InteractiveNoArgs $ do
     call1 "message" =<< mkString "world"
 
 main :: IO ()
