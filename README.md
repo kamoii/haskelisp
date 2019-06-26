@@ -12,19 +12,19 @@ Sample:
     {-# LANGUAGE ForeignFunctionInterface,OverloadedStrings #-}
     module Main where
 
-    import Emacs
+    import Emacs.Core
     import Foreign.C.Types
 
     foreign export ccall "emacs_module_init" emacsModuleInit :: EmacsModule
 
     emacsModuleInit :: EmacsModule
-    emacsModuleInit = defmodule "sample-module" $ do
+    emacsModuleInit = emacsModule (Just "mymodule") $ do
 
-      setVal "foo" (Symbol "bar")
+      fun <- mkIOFun1 (readString . unsafeType) (fmap untype . mkString) $ \txt -> do
+        message $ "haskell squre function called: " <> txt
+        pure $ "!" <> txt <> "!"
 
-      defun "square" $ \i -> do
-        message "haskell squre function called"
-        return $ (i*i :: Int)
+      setCommand "great-from-haskell" InteractiveNoArgs fun
 
     main :: IO ()
     main = undefined
