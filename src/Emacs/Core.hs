@@ -31,15 +31,19 @@ module Emacs.Core
   , mkFun1, mkFun2
   , mkIOFun1, mkIOFun2
   , ELisp(..), mkELisp
-  , eval, evalLexical, evalString  
+  , eval, evalLexical, evalString
+  , message
   , emacsModule
   -- EmacsRuntime, CInt を export しないと foreign export ... EmacsModule で
   -- コンパイルエラーが発生する
   , EmacsModule, EmacsRuntime(..), CInt(..)
+  -- Symbol操作
   , setValue, setFunction, setCommand, InteractiveForm(..)
+  , getValue, getSymbolName, isBounded, getDefaultValue, setDefaultValue
+  , getProperty, setProperty
   ) where
 
-import Prelude()
+import Prelude(Show(..))
 import Protolude hiding (Symbol)
 import Emacs.Internal hiding (isNil, intern, emacsModule)
 import qualified Emacs.Internal as I
@@ -114,6 +118,9 @@ readString = liftEM I.extractString
 -- 数値や文字列は素直なんだけど、他
 -- Nil は空 [] でいいのかな？
 newtype Symbol = Symbol Text
+  deriving (Eq, Ord)
+
+instance Show Symbol where show (Symbol s) = toS s
 
 intern :: Text -> EmacsM (TypedEmacsValue EmacsSymbol)
 intern = liftEM I.intern
@@ -298,12 +305,12 @@ readCons (TypedEmacsValue ev) =
 typeCons :: EmacsValue -> EmacsM (Maybe (TypedEmacsValue EmacsCons))
 typeCons = typeByPredicate "consp"
 
--- * ELisp, eval/evalString 
--- 
+-- * ELisp, eval/evalString
+--
 -- 呼び出しが複数必要な場合、call/mk*系よりは簡単に使える。
--- またマクロ系は funcall では呼べないので eval経由で呼ぶ必要がある。  
--- 型安全のへったくりもないので注意して使う必要あり。  
--- 
+-- またマクロ系は funcall では呼べないので eval経由で呼ぶ必要がある。
+-- 型安全のへったくりもないので注意して使う必要あり。
+--
 
 data ELisp
   = ESymbol Text
@@ -313,25 +320,25 @@ data ELisp
   | ECons ELisp ELisp
   | EList [ELisp]
   | EAlist [(ELisp,ELisp)]
-  | ENil 
+  | ENil
   | EEmacsValue EmacsValue
 
-mkELisp :: ELisp -> EmacsM EmacsValue  
+mkELisp :: ELisp -> EmacsM EmacsValue
 mkELisp (ESymbol sym) = untype <$> mkSymbol (Symbol sym)
 mkELisp (EString str) = untype <$> mkString str
-mkELisp (EKeyword kw) = mkKeyword (Keyword kw)  
-mkELisp (EInt i) = untype <$> mkInteger i  
+mkELisp (EKeyword kw) = mkKeyword (Keyword kw)
+mkELisp (EInt i) = untype <$> mkInteger i
 mkELisp (ECons car cdr) = untype <$> join (cons <$> mkELisp car <*> mkELisp cdr)
-mkELisp (EList ls) = mkList =<< traverse mkELisp ls  
+mkELisp (EList ls) = mkList =<< traverse mkELisp ls
 mkELisp (EAlist as) = mkAList =<< traverse (\(car,cdr) -> (,) <$> mkELisp car <*> mkELisp cdr) as
-mkELisp ENil = mkNil  
+mkELisp ENil = mkNil
 mkELisp (EEmacsValue ev) = pure ev
 
-eval :: ELisp -> EmacsM EmacsValue 
-eval sexp = 
+eval :: ELisp -> EmacsM EmacsValue
+eval sexp =
   call1 "eval" =<< mkELisp sexp
 
-evalLexical :: [(ELisp, ELisp)] -> ELisp -> EmacsM EmacsValue  
+evalLexical :: [(ELisp, ELisp)] -> ELisp -> EmacsM EmacsValue
 evalLexical binds sexp = do
   bindsEv <- mkELisp $ EAlist binds
   sexpEv <- mkELisp sexp
@@ -364,7 +371,7 @@ mkT = call1 "symbol-value" =<< intern "t"
 mkList :: [EmacsValue] -> EmacsM EmacsValue
 mkList evs = call "list" evs
 
-mkAList :: [(EmacsValue,EmacsValue)] -> EmacsM EmacsValue  
+mkAList :: [(EmacsValue,EmacsValue)] -> EmacsM EmacsValue
 mkAList alist = do
   evs <- traverse mkCons $ map (\(a,b) -> Cons a b) alist
   mkList (untype <$> evs)
@@ -380,6 +387,10 @@ unsafeReadList ev = do
       (h:) <$> unsafeReadList t
 
 -- * Module
+
+message :: Text -> EmacsM ()
+message txt =
+  void $ call1 "message" =<< mkString txt
 
 emacsModule :: Maybe Text -> EmacsM () -> EmacsModule
 emacsModule modnameMaybe act =
@@ -461,3 +472,64 @@ setCommand fname form f = do
                    , EList [ESymbol "apply", ESymbol "f", ESymbol "args"]
                    ]
   setFunction fname =<< unsafeType <$> evalLexical binds sexp
+
+
+-- Symbol has four slots.
+--
+--  1. name
+--  2. value (* can have buffer local value)
+--  3. function
+--  4. property list (* can have buffer local list)
+
+getSymbolName :: Text -> EmacsM Text
+getSymbolName name = do
+  name <- call1 "symbol-name" =<< intern name
+  readString $ unsafeType name
+
+-- Could throw exception if the symbol is not setted.
+getValue :: Text -> EmacsM EmacsValue
+getValue name =
+  call1 "symbol-value" =<< intern name
+
+-- if Symbol exists (included in obarray) and a value is bounded.
+isBounded :: Text -> EmacsM Bool
+isBounded name =
+  readBool =<< call1 "boundp" =<< intern name
+
+-- Buffer local
+--
+-- If the variable is buffer local, you need to use
+-- getDefaultValue/setDefaultValue to set/get the global variable.
+getDefaultValue :: Text -> EmacsM EmacsValue
+getDefaultValue name =
+  call1 "default-value" =<< intern name
+
+setDefaultValue :: IsEmacsValue a => Text -> a -> EmacsM EmacsValue
+setDefaultValue name val = do
+  nameQ <- intern name
+  call2 "set-default" nameQ val
+
+--  Keyword Symbol
+
+--  シンボルは任意の属性を持つことができる。
+--
+-- 属性テーブルは シンボルと任意の値に間のハッシュである。
+-- ただし値として nil は設定できない。未設定とnil に設定は区別されない。
+getProperty :: Text -> Text -> EmacsM (Maybe EmacsValue)
+getProperty name property = do
+  nameQ <- intern name
+  propertyQ <- intern property
+  ev <- call2 "get" nameQ propertyQ
+  b <- not <$> isNil ev
+  return $ if b then Just ev else Nothing
+
+setProperty
+  :: (IsEmacsValue v)
+  => Text
+  -> Text
+  -> v
+  -> EmacsM EmacsValue
+setProperty name property value = do
+  nameQ <- intern name
+  propertyQ <- intern property
+  call3 "put" nameQ propertyQ value

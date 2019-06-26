@@ -14,16 +14,17 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE LambdaCase #-}
 module Emacs.Class
-  ( EmacsFun
+  ( EmacsFun  -- メソッドはわざと公開いていない
   , FunType(..)
   , emacsFun
   , funWithDoc
   , fun
   , ToEmacsValue(..)
   , UnsafeReadEmacsValue(..)
-  , defvar
-  , defun, defunWithDoc
-  , defcmd, defcmdWithDoc
+  , setq
+  , getq, getqDefault, modifyq
+  , setf, setfWithDoc
+  , setc, setcWithDoc
   ) where
 
 import Prelude()
@@ -48,8 +49,8 @@ import GHC.TypeLits hiding (Symbol)
 
 
 -- Closed type families を利用した Overlapping/Mulitparameter明示指定回避方法。
--- 参照 https://kseo.github.io/posts/2017-02-05-avoid-overlapping-instances-with-closed-type-families.html  
---  
+-- 参照 https://kseo.github.io/posts/2017-02-05-avoid-overlapping-instances-with-closed-type-families.html
+--
 type family FT a :: FunType where
   FT (IO a) = IOFun
   FT (EmacsM a) = IOFun
@@ -181,33 +182,58 @@ instance UnsafeReadEmacsValue a => UnsafeReadEmacsValue (Maybe a) where
 -- * def系
 -- ただ Emacs の def とは意味あいが違うことに注意。
 
-defvar
+setq
   :: ToEmacsValue ev
   => Text
   -> ev
   -> EmacsM ()
-defvar name ev =
+setq name ev =
   void $ setValue name =<< toEv ev
 
-defunWithDoc
+-- If not bounded symbol, exception happens.
+getq
+  :: UnsafeReadEmacsValue r
+  => Text
+  -> EmacsM r
+getq name =
+  unsafeReadEv =<< getValue name
+
+getqDefault
+  :: UnsafeReadEmacsValue r
+  => Text
+  -> EmacsM r
+getqDefault name =
+  unsafeReadEv =<< getDefaultValue name
+
+-- If not bounded symbol, exception happens.
+modifyq
+  :: (UnsafeReadEmacsValue a, ToEmacsValue v)
+  => Text
+  -> (a -> EmacsM v)
+  -> EmacsM ()
+modifyq name f = do
+  v <- f =<< getq name
+  setq name =<< toEv v
+
+setfWithDoc
   :: forall a
    . EmacsFun a
   => Text
   -> Doc
   -> a
   -> EmacsM ()
-defunWithDoc name doc a =
+setfWithDoc name doc a =
   setFunction name =<< funWithDoc doc a
 
-defun
+setf
   :: forall a
    . EmacsFun a
   => Text
   -> a
   -> EmacsM ()
-defun name = defunWithDoc name (Doc "")
+setf name = setfWithDoc name (Doc "")
 
-defcmdWithDoc
+setcWithDoc
   :: forall a
    . EmacsFun a
   => Text
@@ -215,17 +241,17 @@ defcmdWithDoc
   -> InteractiveForm
   -> a
   -> EmacsM ()
-defcmdWithDoc name doc iform a =
+setcWithDoc name doc iform a =
   setCommand name iform =<< funWithDoc doc a
 
-defcmd
+setc
   :: forall a
    . EmacsFun a
   => Text
   -> InteractiveForm
   -> a
   -> EmacsM ()
-defcmd name = defcmdWithDoc name (Doc "")
+setc name = setcWithDoc name (Doc "")
 
 -- -- * funcall: 関数呼び出しの効率化
 --

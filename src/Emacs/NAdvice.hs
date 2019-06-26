@@ -5,6 +5,7 @@ module Emacs.NAdvice where
 import Prelude()
 import Protolude hiding (Symbol)
 import Emacs.Core
+import Emacs.Class
 
 -- Emacs 24 からアドバイスの機構が一新された(nadvice.el)。以前より大幅
 -- にシンプルになっている。必要な関数は `advice-add` と
@@ -58,7 +59,7 @@ whereToKeyword Before = Keyword "before"
 -- アドバイス関数には 第一引数に元関数、残りは引数が渡される。
 -- 引数を (f &rest args) のように受けると、 (apply f args) で元関数を適用可能。
 adviceAdd
-  :: Text 
+  :: Text
   -> Where
   -> CallableEmacsValue
   -> EmacsM ()
@@ -68,20 +69,27 @@ adviceAdd target where' cev = do
   void $ call3 "advice-add" targetEv whereEv cev
 
 -- 基本的にこの関数さえあれば何でもできる。
--- TODO: アドバイス外せるように  
-around'
+-- TODO: アドバイス外せるように
+around''
   :: Text
   -> (TypedEmacsValue EmacsFunction -> [EmacsValue] -> EmacsM EmacsValue)
   -> EmacsM ()
-around' name ff = do
+around'' name ff = do
   fun <- mkFun (Doc "") (Arity 0,Arity 1000) (\(f:args) -> ff (unsafeType f) args)
   adviceAdd name Around (CEVFunction fun)
 
--- 第一引数として元の関数適用を行なうアクション、第二引数として引数を受け取る  
+-- 第一引数として元の関数適用を行なうアクション、第二引数として引数を受け取る
 -- 元の関数は基本的に素直に呼び出すことが殆んどなので。
-around
+around'
   :: Text
   -> (EmacsM EmacsValue -> [EmacsValue] -> EmacsM EmacsValue)
   -> EmacsM ()
-around name ff =
-  around' name $ \f args -> ff (call' (CEVFunction f) args) args
+around' name ff =
+  around'' name $ \f args -> ff (call' (CEVFunction f) args) args
+
+around
+  :: EmacsFun a
+  => Text
+  -> (EmacsM EmacsValue -> a)
+  -> EmacsM ()
+around name ff = around' name (emacsFun <$> ff)

@@ -1,1 +1,0 @@
-int plugin_is_GPL_compatible;
