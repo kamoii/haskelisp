@@ -3,7 +3,7 @@ EXPERIMENTAL
 Write Emacs module in Haskell, using Emacs 25's Dynamic Module feature.
 
 * Only tested with linux.
-* Only tested with Stack (LTS 6.26)
+* Only tested with Stack (LTS 13.26)
 * You need to build emacs with --with-modules configuration options
 * You need to specify some ghc-options to make it work
 
