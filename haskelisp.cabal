@@ -39,7 +39,7 @@ executable internal-test.so
   hs-source-dirs:      test
   main-is:             InternalTest.hs
   cc-options:          -fPIC
-  ghc-options:         -shared -dynamic -fPIC -lHSrts-ghc8.2.2
+  ghc-options:         -shared -dynamic -fPIC -lHSrts-ghc8.6.5
   c-sources:           plugin_is_GPL_compatible.c
   build-depends:       base
                      , haskelisp
@@ -51,7 +51,7 @@ executable core-test.so
   hs-source-dirs:      test
   main-is:             CoreTest.hs
   cc-options:          -fPIC
-  ghc-options:         -shared -dynamic -fPIC -lHSrts-ghc8.2.2
+  ghc-options:         -shared -dynamic -fPIC -lHSrts-ghc8.6.5
   c-sources:           plugin_is_GPL_compatible.c
   build-depends:       base
                      , haskelisp

@@ -31,34 +31,42 @@ Sample:
 
 # How to use
 
-Explaining using Stack and LTS 6.26 as premise.
+Explaining using Stack and LTS 13.26 as premise.
 
 ## 1. Create a new project with Stack
 
-    $ stack --resolver=lts-6.26 new mymodule
+    $ stack --resolver=lts-13.26 new mymodule
 
 ## 2. Change executable name to *.so and add haskelisp to the dependency
 
-mymodule.cabal:
+project.yaml:
 
-    executable mymodule.so
-      hs-source-dirs:      app
-      main-is:             Main.hs
-      ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-      build-depends:       base
-                         , mymodule
-                         , haskelisp
-      default-language:    Haskell2010
+    executables:
+      mymodule.so:
+        main:                Main.hs
+        source-dirs:         app
+        ghc-options:
+        - -threaded
+        - -rtsopts
+        - -with-rtsopts=-N
+        dependencies:
+        - mymodule
+        - haskelisp
 
 ## 3. Change `ghc-options` and add `cc-options` to make shared library
 
-mymodule.cabal:
+project.yaml:
 
-    executable mymodule.so
-      ...
-      cc-options:          -fPIC
-      ghc-options:         -shared -dynamic -fPIC -lHSrts-ghc7.10.3
-      ...
+    executables:
+      mymodule.so:
+        main:                Main.hs
+        source-dirs:         app
+        cc-options:          -fPIC
+        ghc-options:
+        - -shared
+        - -dynamic
+        - -fPIC
+        - -lHSrts-ghc8.6.5
 
 ## 4. Modules must be GPL compatible
 
@@ -67,12 +75,12 @@ Prepare a C source file and specify it with `c-sources` option.
 
     $ echo 'int plugin_is_GPL_compatible;' > plugin_is_GPL_compatible.c
 
-mymodule.cabal:
+project.yaml:
 
-    executable mymodule.so
-      ...
-      c-sources:           plugin_is_GPL_compatible.c
-      ...
+    executables:
+      mymodule.so:
+        ...
+        c-sources:           plugin_is_GPL_compatible.c
 
 ## 5. Write some code
 
@@ -81,17 +89,19 @@ Main.hs:
     {-# LANGUAGE ForeignFunctionInterface,OverloadedStrings #-}
     module Main where
 
-    import Emacs
+    import Emacs.Core
     import Foreign.C.Types
 
     foreign export ccall "emacs_module_init" emacsModuleInit :: EmacsModule
 
     emacsModuleInit :: EmacsModule
-    emacsModuleInit = defmodule "mymodule" $ do
+    emacsModuleInit = emacsModule (Just "mymodule") $ do
 
-      defun "mysquare" $ \i -> do
-        message "haskell squre function called"
-        return $ (i*i :: Int)
+      fun <- mkIOFun1 (readString . unsafeType) (fmap untype . mkString) $ \txt -> do
+        message $ "haskell squre function called: " <> txt
+        pure $ "!" <> txt <> "!"
+
+      setCommand "great-from-haskell" InteractiveNoArgs fun
 
     main :: IO ()
     main = undefined
@@ -107,7 +117,11 @@ so include a dummy one. It won't be called.
 
 For example, if `~/.emacs.d/lisp` is included in `load-path`:
 
-    $ cp .stack-work/install/x86_64-linux/lts-6.26/7.10.3/bin/mymodule.so ~/.emacs.d/lisp/
+    $ cp $(stk path --local-install-root)/bin/mymodule.so ~/.emacs.d/lisp/
+
+Or you can start a clean emacs with load-path seted:
+
+    $ emacs --no-splash -q -L $(stk path --local-install-root)/bin/
 
 ## 8. Load your shared library from Emacs
 

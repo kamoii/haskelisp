@@ -1,3 +1,0 @@
-#!/bin/bash
-
-emacs-build --no-splash -q -L ~/mygithub/haskelisp/.stack-work/install/x86_64-linux-tinfo6/lts-10.2/8.2.2/bin/
